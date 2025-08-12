@@ -1,7 +1,7 @@
 # CCT-LSTM_reproduce
 
 ## integrity_and_masterManifest.py 
-### Check the integrity of UBFC-Phys dataset by the following logic:
+## Check the integrity of UBFC-Phys dataset by the following logic:
 1. In selected folder, if "UBFC-Phys" folder exists, then it will be used as the dataset.
 2. In "UBFC-Phys", if "Data" folder exists.
 3. If there are 56 folders named "s1(subject number)", "s2", ..., "s56" in "Data" folder.
@@ -13,7 +13,13 @@
    5. if there is 1 csv file named "selfReportedAnx_s1(subject number).csv".
 If any of the above conditions are not met, it will print an error message and exit.
 
-### After integrity check, it will generate a master manifest file named "masterManifest.csv" in the selected folder.
+### To be noticed, after running integrity check ourselfs we found the Problem below:
+we download the dataset from dat@UBF https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html 
+- Error: In folder 's40' file 'vid_s40_T3.avi' not found.  
+Whcih is just a name error, you can check it by yourself.
+- Error: In folder 's56' file 'selfReportedAnx_s56.csv' not found.  
+The self report in folder s55 & s56 have the same value, which might be a dataset error, but we don't need the Anx_Report in our project, so we ignore it.
+## After integrity check, it will generate a master manifest file named "masterManifest.csv" in the selected folder.
 The master manifest file will contain the following columns:
 - subject: subject number
 - group: 'test' or 'ctrl'

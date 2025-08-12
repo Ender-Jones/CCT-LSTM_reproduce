@@ -1,4 +1,3 @@
-import os
 import sys
 import pandas as pd
 from pathlib import Path
@@ -85,10 +84,10 @@ def check_dataset_integrity_and_create_manifest(dataset_base_path: Path):
             if len(lines) < 5:
                 print(f"Error: File '{info_file_path}' incomplete or malformed.")
                 sys.exit(1)
-            elif lines[2] != 'test' or lines[2] != 'ctrl':
+            elif lines[2] != 'test' and lines[2] != 'ctrl':
                 print(f"Error: File '{info_file_path}' has unexpected group value: {lines[2]}.")
                 sys.exit(1)
-            elif line[0] != subject_id:
+            elif lines[0] != subject_id:
                 print(f"Error: File '{info_file_path}' subject ID mismatch: expected '{subject_id}', found '{lines[0]}'.")
                 sys.exit(1)
             else:
@@ -96,9 +95,8 @@ def check_dataset_integrity_and_create_manifest(dataset_base_path: Path):
 
         manifest_data.append({'subject': subject_id, 'group': group})
 
-    # 创建并保存 master manifest
     manifest_df = pd.DataFrame(manifest_data)
-    output_path = dataset_base_path / "master_manifest.csv"
+    output_path = ubfc_phys_path / "master_manifest.csv"
     manifest_df.to_csv(output_path, index=False)
 
     print("\n======================================================")
