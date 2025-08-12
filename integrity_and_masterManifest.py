@@ -1,3 +1,4 @@
+import os
 import sys
 import pandas as pd
 from pathlib import Path
@@ -98,6 +99,10 @@ def check_dataset_integrity_and_create_manifest(dataset_base_path: Path):
     manifest_df = pd.DataFrame(manifest_data)
     output_path = ubfc_phys_path / "master_manifest.csv"
     manifest_df.to_csv(output_path, index=False)
+
+    # make a file to store UBFC_data path.
+    with open(os.path.join(os.path.dirname(__file__), "UBFC_data_path.txt"), "w") as f:
+        f.write(str(data_path))
 
     print("\n======================================================")
     print("Integrity Check Finished, Master Manifest created！")
