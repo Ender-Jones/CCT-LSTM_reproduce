@@ -39,9 +39,7 @@ def check_dataset_integrity_and_create_manifest(dataset_base_path: Path):
 
     print("Found 56/56 subject folders, Checking integrity of each folder...")
 
-    # TODO: 这是否同时在处理manifest和检查完整性？ 考虑分离这两个功能
     manifest_data = []
-
     # integrate every subfolder, check files, and create manifest.
     for i in tqdm(range(1, 57), desc="Processing subjects"):
         subject_id = f"s{i}"
@@ -125,4 +123,3 @@ if __name__ == "__main__":
     else:
         print("No directory selected. Exiting.")
         sys.exit(1)
-
