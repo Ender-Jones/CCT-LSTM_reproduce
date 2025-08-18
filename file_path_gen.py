@@ -14,6 +14,11 @@ class FIlePathGen:
         with open('UBFC_data_path.txt', 'r') as f:
             self.datapath = Path(f.read().strip())
 
+    def get_subject_list(self):
+        # Get a list of all subject IDs in the dataset.
+        subject_list = [d.name for d in self.datapath.iterdir() if d.is_dir()]
+        return subject_list
+
     def vid_path_gen(self, test_id, level):
         output_path = self.datapath / test_id / f'vid_{test_id}_{level}.avi'
         return output_path
