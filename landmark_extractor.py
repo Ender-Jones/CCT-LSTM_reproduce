@@ -1,5 +1,4 @@
 import mediapipe as mp
-import file_path_gen
 import cv2
 import json
 
@@ -27,10 +26,6 @@ class LandmarkExtractor:
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence
         )
-
-        # init file path generator and get subject list
-        self.file_path_gen = file_path_gen.FIlePathGen()
-        self.subject_list = self.file_path_gen.get_subject_list()
 
     @staticmethod
     def _cast_landmarks_to_json(landmark_result_obj):
@@ -80,6 +75,29 @@ class LandmarkExtractor:
             current_window_landmarks[current_frame_index] = landmarks
 
         return current_window_landmarks
+
+    @staticmethod
+    def _save_landmarks_to_subject_folder(landmarks_data, video_path):
+        """
+        save landmarks data to a JSON file
+        into subject folder/landmarks/video_name.json
+        """
+        if not landmarks_data:
+            print(f"No landmarks to save for video: {video_path.name}")
+            return
+
+        # save the landmarks data to a JSON file in landmarks folder under the subject folder
+        # check if the landmarks folder exists, if not create it
+        landmarks_folder_path = video_path.parent / 'landmarks'
+        landmarks_folder_path.mkdir(parents=True, exist_ok=True)
+
+        # create the JSON file path
+        json_file_path = landmarks_folder_path / f"{video_path.stem}_landmarks.json"
+        # write the landmarks data to the JSON file
+        with open(json_file_path, 'w') as json_file:
+            json.dump(landmarks_data, json_file, indent=4)
+
+        print(f"Landmarks saved to {json_file_path}")
 
     def extract_landmarks_from_video(self, video_path):
         """

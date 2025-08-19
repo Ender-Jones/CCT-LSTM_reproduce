@@ -1,6 +1,6 @@
 from pathlib import Path
 
-class FIlePathGen:
+class FilePathGen:
     # Dynamically generate file paths for UBFC-Phys dataset.
     def __init__(self, config_path: str = "UBFC_data_path.txt"):
         self.datapath_config = Path(config_path)
