@@ -32,57 +32,58 @@ class LandmarkExtractor:
         self.file_path_gen = file_path_gen.FIlePathGen()
         self.subject_list = self.file_path_gen.get_subject_list()
 
-    def _process_single_frame(self, frame_img):
-        """
-        处理单帧图像并提取人脸关键点。
-        这是一个 "工人" 函数。
-        """
-        landmarks_for_this_frame = []
+    @staticmethod
+    def _cast_landmarks_to_json(landmark_result_obj):
+        """use list comprehension to convert landmarks to JSON serializable format """
+        if landmark_result_obj and landmark_result_obj.multi_face_landmarks:
+            return [
+                {'x': lm.x, 'y': lm.y, 'z': lm.z}
+                for lm in landmark_result_obj.multi_face_landmarks[0].landmark
+            ]
+        # if no landmarks are detected, return none
+        return None
 
-        # 转换颜色空间并设置标志以提高性能
-        frame_rgb = cv2.cvtColor(frame_img, cv2.COLOR_BGR2RGB)
+    def _process_single_frame(self, frame_bgr):
+        """process a single frame to extract landmarks """
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        # to boost performance, disable writing to the output
         frame_rgb.flags.writeable = False
 
-        # MediaPipe处理
+        # process the frame using MediaPipe Face Mesh
         results = self.face_mesh.process(frame_rgb)
 
-        if results.multi_face_landmarks:
-            landmarks_for_this_frame = [
-                {'x': lm.x, 'y': lm.y, 'z': lm.z}
-                for lm in results.multi_face_landmarks[0].landmark
-            ]
+        return self._cast_landmarks_to_json(results)
 
-        return landmarks_for_this_frame
-
-    def _process_window(self, capture, start_frame, end_frame):
-        """
-        处理单个时间窗口内的所有帧。
-        这是一个 "工头" 函数。
-        """
+    def _process_window(self, capture, start_frame, end_frame, video_fps):
+        """process all frames in a sliding window"""
         current_window_landmarks = {}
 
-        # 定位到窗口的起始帧
+        # position the capture to the start frame
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-        # 遍历窗口内的每一帧
+        # loop through frames in the current window
         for current_frame_index in range(start_frame, end_frame):
             success, frame_img = capture.read()
             if not success:
-                print(f"Warning: Could not read frame {current_frame_index} from video.")
+                print(f"Warning: Could not read frame {current_frame_index} from video."
+                      f"Around time {current_frame_index / video_fps:.2f} seconds.")
                 break
 
-            # 调用 "工人" 函数处理单帧
             landmarks = self._process_single_frame(frame_img)
+            # report error if no landmarks are detected
+            if landmarks is None:
+                print(f"Warning: No landmarks detected in frame {current_frame_index}. "
+                      f"Around time {current_frame_index / video_fps:.2f} seconds.")
+                landmarks = []  # use empty list to indicate no landmarks
 
-            # 记录该帧的结果（即使是空列表）
+            # record the landmarks for the current frame even if they are empty
             current_window_landmarks[current_frame_index] = landmarks
 
         return current_window_landmarks
 
     def extract_landmarks_from_video(self, video_path):
         """
-        从整个视频中提取所有滑动窗口的关键点数据。
-        这是 "总管" 函数，也是对外暴露的主要接口。
+        The main orchestrator function
         """
         capture = cv2.VideoCapture(str(video_path))  # use str() to ensure compatibility with cv2
         if not capture.isOpened():
@@ -90,29 +91,30 @@ class LandmarkExtractor:
 
         print(f"Processing video: {video_path.name}")
 
-        # get video properties
+        # get video properties and check for validity
         video_fps = capture.get(cv2.CAP_PROP_FPS)
         video_total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         if video_fps == 0 or video_total_frames == 0:
             capture.release()
             raise ValueError("Error: Video file might be corrupted or FPS/frame count is zero.")
 
-        # 计算窗口和步进的帧数
+        # convert time to frames
         sliding_window_in_frames = int(self.window_length * video_fps)
         step_in_frames = int(self.step_length * video_fps)
 
-        all_windows_landmarks = []
-
-        # 主循环：滑动窗口
+        all_windows_landmarks = []  # for storing landmarks for all windows
+        # outer loop: slide the window across the video
         for window_count, start_frame in enumerate(range(0, video_total_frames, step_in_frames)):
             end_frame = start_frame + sliding_window_in_frames
+
+            # Ensure the end frame does not exceed total frames
             if end_frame > video_total_frames:
                 end_frame = video_total_frames
 
-            # 调用 "工头" 函数处理一个窗口
-            landmarks_in_window = self._process_window(capture, start_frame, end_frame)
+            # process the current window
+            landmarks_in_window = self._process_window(capture, start_frame, end_frame, video_fps)
 
-            # 收集结果
+            # collect landmarks for the current window
             if landmarks_in_window:
                 all_windows_landmarks.append({
                     'video_name': video_path.name,
@@ -213,9 +215,3 @@ class LandmarkExtractor:
         """
         print("Closing Face Mesh instance.")
         self.face_mesh.close()
-
-    # def extract_landmarks(self, image):
-    #     results = self.face_mesh.process(image)
-    #     if results.multi_face_landmarks:
-    #         return results.multi_face_landmarks[0]
-    #     return None
