@@ -36,6 +36,11 @@ class FilePathGen:
         output_path = self.datapath / test_id / f'info_{test_id}.txt'
         return output_path
 
+    def get_landmark_path(self, subject_id, level):
+        # Generate the path for the landmark file.
+        output_path = self.datapath / subject_id / 'landmarks' / f"{subject_id}_landmarks_{level}.json"
+        return output_path
+
     def get_all_video_paths(self, subject_list, level=None):
         # Generate a list of all video paths for a given subject list and level.
         if level is None:

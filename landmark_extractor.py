@@ -4,6 +4,12 @@ from mediapipe.tasks.python import vision
 import cv2
 import json
 
+"""
+TODO: the extraction is really slow, 
+consider optimizing the windowing process to use gpu,
+or use muli-processing to handle multiple windows in parallel.
+"""
+
 
 class LandmarkExtractor:
     def __init__(self, window_length=60, step_length=5, model_path='face_landmarker.task'):

@@ -15,7 +15,7 @@ If any of the above conditions are not met, it will print an error message and e
 
 ### To be noticed, after running integrity check ourselfs we found the Problem below:
 we download the dataset from:  
-dat@UBF https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html 
+dat@UBFC https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html 
 - Error: In folder 's40' file 'vid_s40_T3.avi' not found.  
 Whcih is just a name error, you can check it by yourself.
 - Error: In folder 's56' file 'selfReportedAnx_s56.csv' not found.  
