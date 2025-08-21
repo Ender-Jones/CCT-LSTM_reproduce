@@ -1,55 +1,73 @@
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 import cv2
 import json
 
 
 class LandmarkExtractor:
-    def __init__(self,
-                 window_length=60,
-                 step_length=5,
-                 static_image_mode=False,
-                 max_num_faces=1,
-                 refine_landmarks=True,
-                 min_detection_confidence=0.5,
-                 min_tracking_confidence=0.5):
+    def __init__(self, window_length=60, step_length=5, model_path='face_landmarker.task'):
+        base_options = python.BaseOptions(
+            model_asset_path=model_path,
+            delegate=python.BaseOptions.Delegate.GPU
+        )
+
+        self.options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO,
+            num_faces=1,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False
+        )
 
         # hyperparameters for windowing
         self.window_length = window_length  # in seconds
         self.step_length = step_length  # in seconds
 
-        # Initialize MediaPipe Face Mesh
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=static_image_mode,
-            max_num_faces=max_num_faces,
-            refine_landmarks=refine_landmarks,
-            min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=min_tracking_confidence
-        )
+        # # Initialize MediaPipe Face Mesh
+        # self.mp_face_mesh = mp.solutions.face_mesh
+        # self.face_mesh = self.mp_face_mesh.FaceMesh(
+        #     static_image_mode=static_image_mode,
+        #     max_num_faces=max_num_faces,
+        #     refine_landmarks=refine_landmarks,
+        #     min_detection_confidence=min_detection_confidence,
+        #     min_tracking_confidence=min_tracking_confidence
+        # )
 
     @staticmethod
     def _cast_landmarks_to_json(landmark_result_obj):
         """use list comprehension to convert landmarks to JSON serializable format """
-        if landmark_result_obj and landmark_result_obj.multi_face_landmarks:
+        if landmark_result_obj and landmark_result_obj.face_landmarks:
+            face_landmarks_list = landmark_result_obj.face_landmarks[0]
             return [
                 {'x': lm.x, 'y': lm.y, 'z': lm.z}
-                for lm in landmark_result_obj.multi_face_landmarks[0].landmark
+                for lm in face_landmarks_list
             ]
         # if no landmarks are detected, return none
         return None
 
-    def _process_single_frame(self, frame_bgr):
-        """process a single frame to extract landmarks """
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        # to boost performance, disable writing to the output
-        frame_rgb.flags.writeable = False
+    def _process_single_frame(self, landmarker, frame_bgr, timestamp_ms):
+        """process single frame use new MediaPipe FaceLandmarker API"""
 
-        # process the frame using MediaPipe Face Mesh
-        results = self.face_mesh.process(frame_rgb)
+        # 1. convert the frame to MediaPipe Image format
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
 
+        # 2. use the face_landmarker to detect landmarks, the timestamp is in milliseconds
+        results = landmarker.detect_for_video(mp_image, timestamp_ms)
         return self._cast_landmarks_to_json(results)
 
-    def _process_window(self, capture, start_frame, end_frame, video_fps):
+    # def _process_single_frame(self, frame_bgr):
+    #     """process a single frame to extract landmarks """
+    #     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    #     # to boost performance, disable writing to the output
+    #     frame_rgb.flags.writeable = False
+    #
+    #     # process the frame using MediaPipe Face Mesh
+    #     results = self.face_mesh.process(frame_rgb)
+    #
+    #     return self._cast_landmarks_to_json(results)
+
+    def _process_window(self, landmarker, capture, start_frame, end_frame, video_fps):
         """process all frames in a sliding window"""
         current_window_landmarks = {}
 
@@ -64,7 +82,9 @@ class LandmarkExtractor:
                       f"Around time {current_frame_index / video_fps:.2f} seconds.")
                 break
 
-            landmarks = self._process_single_frame(frame_img)
+            timestamp_ms = int(current_frame_index * 1000 / video_fps)
+
+            landmarks = self._process_single_frame(landmarker, frame_img, timestamp_ms)
             # report error if no landmarks are detected
             if landmarks is None:
                 print(f"Warning: No landmarks detected in frame {current_frame_index}. "
@@ -77,7 +97,7 @@ class LandmarkExtractor:
         return current_window_landmarks
 
     @staticmethod
-    def _save_landmarks_to_subject_folder(landmarks_data, video_path):
+    def save_landmarks_to_subject_folder(landmarks_data, video_path):
         """
         save landmarks data to a JSON file
         into subject folder/landmarks/video_name.json
@@ -101,7 +121,8 @@ class LandmarkExtractor:
 
     def extract_landmarks_from_video(self, video_path):
         """
-        The main orchestrator function
+        The main orchestrator function.
+        It creates a new FaceLandmarker instance for each processing window.
         """
         capture = cv2.VideoCapture(str(video_path))  # use str() to ensure compatibility with cv2
         if not capture.isOpened():
@@ -121,26 +142,30 @@ class LandmarkExtractor:
         step_in_frames = int(self.step_length * video_fps)
 
         all_windows_landmarks = []  # for storing landmarks for all windows
+
         # outer loop: slide the window across the video
         for window_count, start_frame in enumerate(range(0, video_total_frames, step_in_frames)):
-            end_frame = start_frame + sliding_window_in_frames
+            with vision.FaceLandmarker.create_from_options(self.options) as landmarker:
+                end_frame = start_frame + sliding_window_in_frames
 
-            # Ensure the end frame does not exceed total frames
-            if end_frame > video_total_frames:
-                end_frame = video_total_frames
+                # Ensure the end frame does not exceed total frames
+                if end_frame > video_total_frames:
+                    end_frame = video_total_frames
 
-            # process the current window
-            landmarks_in_window = self._process_window(capture, start_frame, end_frame, video_fps)
+                # process the current window using the newly created landmarker
+                landmarks_in_window = self._process_window(
+                    landmarker, capture, start_frame, end_frame, video_fps
+                )
 
-            # collect landmarks for the current window
-            if landmarks_in_window:
-                all_windows_landmarks.append({
-                    'video_name': video_path.name,
-                    'window_id': window_count,
-                    'start_frame': start_frame,
-                    'end_frame': end_frame - 1,
-                    'landmarks': landmarks_in_window
-                })
+                # collect landmarks for the current window
+                if landmarks_in_window:
+                    all_windows_landmarks.append({
+                        'video_name': video_path.name,
+                        'window_id': window_count,
+                        'start_frame': start_frame,
+                        'end_frame': end_frame - 1,
+                        'landmarks': landmarks_in_window
+                    })
 
         capture.release()
         return all_windows_landmarks
@@ -226,10 +251,3 @@ class LandmarkExtractor:
     #         current_window_landmarks = {}  # reset for the next window
     #
     #     return all_windows_landmarks
-
-    def close(self):
-        """
-        Closes the MediaPipe Face Mesh instance to free up resources.
-        """
-        print("Closing Face Mesh instance.")
-        self.face_mesh.close()

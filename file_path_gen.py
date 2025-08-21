@@ -1,5 +1,6 @@
 from pathlib import Path
 
+
 class FilePathGen:
     # Dynamically generate file paths for UBFC-Phys dataset.
     def __init__(self, config_path: str = "UBFC_data_path.txt"):
@@ -31,6 +32,20 @@ class FilePathGen:
         output_path = self.datapath / test_id / f'eda_{test_id}_{level}.csv'
         return output_path
 
-    def meta_info_path_gen(self, test_id, level):
+    def meta_info_path_gen(self, test_id):
         output_path = self.datapath / test_id / f'info_{test_id}.txt'
         return output_path
+
+    def get_all_video_paths(self, subject_list, level=None):
+        # Generate a list of all video paths for a given subject list and level.
+        if level is None:
+            level = ['T1', 'T2', 'T3']
+        all_video_paths = []
+        for subject_id in subject_list:
+            for file_level in level:
+                video_path = self.vid_path_gen(subject_id, file_level)
+                if video_path.is_file():
+                    all_video_paths.append(video_path)
+                else:
+                    print(f"Warning: Video file {video_path} does not exist.")
+        return all_video_paths

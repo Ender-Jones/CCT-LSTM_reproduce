@@ -6,6 +6,7 @@ from tqdm import tqdm
 import tkinter as tk
 from tkinter import filedialog
 
+
 class IntegrityCheckerAndManifestCreator:
     @staticmethod
     def _check_dataset_integrity_and_create_manifest(dataset_base_path: Path):
@@ -110,18 +111,17 @@ class IntegrityCheckerAndManifestCreator:
         print(manifest_df.head())
         print("======================================================")
 
-
     def running_script(self):
         """Main function to run the integrity check and manifest creation."""
         root = tk.Tk()
         root.withdraw()  # hide the root window
 
         print("Please select the directory that contains the 'UBFC-Phys' folder.")
-        selected_path = filedialog.askdirectory(title="Root Directory Selection",)
+        selected_path = filedialog.askdirectory(title="Root Directory Selection")
 
         if selected_path:
             dataset_root_path = Path(selected_path)
-            self.check_dataset_integrity_and_create_manifest(dataset_root_path)
+            self._check_dataset_integrity_and_create_manifest(dataset_root_path)
         else:
             print("No directory selected. Exiting.")
             sys.exit(1)
