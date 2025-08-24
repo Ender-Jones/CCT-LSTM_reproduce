@@ -16,7 +16,7 @@ class FilePathGen:
             self.datapath = Path(f.read().strip())
 
     def get_subject_list(self):
-        # Get a list of all subject IDs in the dataset.
+        """Get a list of all subject IDs in the dataset by iterating over the datapath folder names"""
         subject_list = [d.name for d in self.datapath.iterdir() if d.is_dir()]
         return subject_list
 
