@@ -4,7 +4,7 @@ import numpy as np
 
 # Add the local pyVHR clone to the path to allow imports.
 # This assumes the 'pyVHR' folder is in the same directory as this script's parent.
-pyvhr_path = Path(__file__).parent.parent / 'pyVHR'
+pyvhr_path = Path(__file__).parent / 'pyVHR'
 if pyvhr_path.exists() and str(pyvhr_path) not in sys.path:
     sys.path.insert(0, str(pyvhr_path))
 
@@ -13,7 +13,8 @@ try:
     from pyVHR.analysis.video_analysis import VideoAnalysis
     from pyVHR.BPM.BPM_methods import get_BPM
     from pyVHR.utils.errors import get_error_method
-except ImportError:
+except Exception as e:
+    print(e)
     print("---")
     print("ERROR: pyVHR library not found.")
     print(f"Attempted to look for it in: {pyvhr_path}")
