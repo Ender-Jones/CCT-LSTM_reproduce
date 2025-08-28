@@ -4,7 +4,7 @@ import numpy as np
 
 # Add the local pyVHR clone to the path to allow imports.
 # This assumes the 'pyVHR' folder is in the same directory as this script's parent.
-pyvhr_path = Path(__file__).parent.parent / 'pyVHR'
+pyvhr_path = Path(__file__).parent / 'pyVHR'
 if pyvhr_path.exists() and str(pyvhr_path) not in sys.path:
     sys.path.insert(0, str(pyvhr_path))
 
