@@ -3,12 +3,15 @@ import tqdm
 import json
 from pathlib import Path
 import cv2
+import numpy as np
+from pyts.image import MarkovTransitionField
 
 # import all necessary modules
 from landmark_extractor import LandmarkExtractor
 from file_path_gen import FilePathGen
 from integrity_and_masterManifest import IntegrityCheckerAndManifestCreator
 from pca_and_mtf import PCAandMTFProcessor
+from rppg_extractor import RppgExtractor
 
 
 def run_integrity_check():
@@ -107,6 +110,76 @@ def run_pca_mtf_pipeline():
     print("--- PCA and MTF Image Generation Finished ---")
 
 
+def run_rppg_pipeline(window_length_sec=60, step_length_sec=5, image_size=224, mtf_bins=8):
+    """The rPPG signal extraction, windowing, and MTF image generation logic."""
+    print("--- Starting rPPG Signal to MTF Image Generation ---")
+    try:
+        fpg = FilePathGen()
+        rppg_ext = RppgExtractor()
+        mtf = MarkovTransitionField(n_bins=mtf_bins)
+    except FileNotFoundError as e:
+        print(f"Error initializing: {e}. Run integrity check first.")
+        return
+    except Exception as e:
+        print(f"An unexpected error occurred during initialization: {e}")
+        return
+
+    subject_list = fpg.get_subject_list()
+    all_video_paths = fpg.get_all_video_paths(subject_list)
+
+    for video_path in tqdm.tqdm(all_video_paths, desc="Processing Videos for rPPG"):
+        try:
+            subject_id = video_path.parent.name
+            level_id = video_path.stem.split('_')[-1]
+
+            # Define and create the output directory for this subject
+            output_dir = video_path.parent / 'rppg_mtf_images'
+            output_dir.mkdir(exist_ok=True)
+
+            # --- Step 1: Extract the full rPPG signal from the video ---
+            signal, fps = rppg_ext.extract_signal(video_path)
+            if signal is None or fps is None:
+                print(f"Skipping {video_path.name}: Failed to extract rPPG signal.")
+                continue
+
+            # --- Step 2: Windowing the signal ---
+            window_frames = int(window_length_sec * fps)
+            step_frames = int(step_length_sec * fps)
+            total_frames = len(signal)
+
+            for window_id, start_frame in enumerate(range(0, total_frames, step_frames)):
+                end_frame = start_frame + window_frames
+                if end_frame > total_frames:
+                    # Skip the last window if it's shorter than the required length
+                    continue
+                
+                # Check if image already exists
+                image_name = f"{subject_id}_{level_id}_rppg_window_{window_id}.png"
+                output_image_path = output_dir / image_name
+                if output_image_path.exists():
+                    continue # Silently skip if already processed
+
+                # --- Step 3: Apply MTF to the window ---
+                signal_window = signal[start_frame:end_frame]
+                
+                # MTF expects (n_samples, n_timestamps), so we reshape
+                mtf_image = mtf.fit_transform(signal_window.reshape(1, -1))[0]
+
+                # --- Step 4: Resize, normalize, and save the image ---
+                resized_image = cv2.resize(mtf_image, (image_size, image_size))
+                
+                # Normalize to 0-255 and convert to uint8 grayscale image
+                normalized_image = cv2.normalize(resized_image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+                
+                cv2.imwrite(str(output_image_path), normalized_image)
+
+        except Exception as e:
+            print(f"!!! ERROR processing {video_path.name} for rPPG: {e}")
+            continue
+    
+    print("--- rPPG MTF Image Generation Finished ---")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Data processing pipeline for UBFC-Phys dataset.")
 
@@ -120,6 +193,9 @@ def main():
 
     parser_process = subparsers.add_parser('process', help='Process landmarks into MTF images.')
     parser_process.set_defaults(func=run_pca_mtf_pipeline)
+
+    parser_rppg = subparsers.add_parser('rppg', help='Extract rPPG signals and process into MTF images.')
+    parser_rppg.set_defaults(func=run_rppg_pipeline)
 
     args = parser.parse_args()
     args.func()
