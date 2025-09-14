@@ -150,13 +150,12 @@ class LandmarkExtractor:
         all_windows_landmarks = []  # for storing landmarks for all windows
 
         # outer loop: slide the window across the video
-        for window_count, start_frame in enumerate(range(0, video_total_frames, step_in_frames)):
+        # This logic ensures that only full windows are processed, aligning with the rPPG extraction method.
+        for window_count, start_frame in enumerate(
+                range(0, video_total_frames - sliding_window_in_frames + 1, step_in_frames)
+        ):
             with vision.FaceLandmarker.create_from_options(self.options) as landmarker:
                 end_frame = start_frame + sliding_window_in_frames
-
-                # Ensure the end frame does not exceed total frames
-                if end_frame > video_total_frames:
-                    end_frame = video_total_frames
 
                 # process the current window using the newly created landmarker
                 landmarks_in_window = self._process_window(
