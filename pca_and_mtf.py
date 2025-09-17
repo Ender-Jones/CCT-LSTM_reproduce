@@ -81,14 +81,16 @@ class PCAandMTFProcessor:
         Returns:
             np.ndarray: A single RGB image of shape (image_size, image_size, 3).
         """
-        # TODO: 这个resize的底层本质上应该是使用该method默认的bilinear interpolation. 原论文中没有说明. 这里可以以后注意求证
-        resized_images = [cv2.resize(img, (self.image_size, self.image_size)) for img in mtf_images]
+        # The resizing is now handled by torchvision.transforms in the Dataset,
+        # so we will save the full resolution images.
+        # resized_images = [cv2.resize(img, (self.image_size, self.image_size)) for img in mtf_images]
         
         # Stack the channels along the last axis to form an RGB image
-        rgb_image = np.stack(resized_images, axis=-1)
+        rgb_image = np.stack(mtf_images, axis=-1)
         
         # Normalize to 0-255 and convert to uint8 for image representation
-        rgb_image = (rgb_image * 255).astype(np.uint8)
+        # This normalization is a standard practice for saving image files.
+        rgb_image = cv2.normalize(rgb_image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         
         return rgb_image
 
