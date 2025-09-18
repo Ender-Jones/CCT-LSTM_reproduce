@@ -216,33 +216,34 @@ def get_default_transforms() -> Callable:
 
 
 if __name__ == '__main__':
-    # 这是一个简单的使用示例和测试区域
+    # A simple usage example and testing area.
 
-    # 假设 fpg.datapath 指向了 .../UBFC-Phys/Data
+    # Assume fpg.datapath points to the root of the dataset, e.g., .../UBFC-Phys/Data
     fpg = FilePathGen()
     DATA_ROOT = fpg.datapath
 
-    # --- 测试 SingleImageDataset ---
+    # --- Test SingleImageDataset ---
     print("--- Testing SingleImageDataset ---")
-    # 假设我们用 s1 到 s10 的受试者进行测试
+    # Let's use subjects s1 to s10 for testing.
     test_subjects = [f's{i}' for i in range(1, 11)]
     try:
-        # 仅加载 landmark 模态
+        # Load only the landmark modality
         landmark_dataset = SingleImageDataset(
             data_root=DATA_ROOT,
             modality='landmark',
             subject_list=test_subjects,
             transform=get_default_transforms()
         )
-        print(f"成功创建 Landmark Dataset，样本总数: {len(landmark_dataset)}")
-        # 获取第一个样本
-        # img, lbl = landmark_dataset[0]
-        # print(f"第一个样本的形状: {img.shape}, 标签: {lbl}")
+        print(f"Successfully created Landmark Dataset. Total samples: {len(landmark_dataset)}")
+        # To get the first sample:
+        # if len(landmark_dataset) > 0:
+        #     img, lbl = landmark_dataset[0]
+        #     print(f"Shape of the first sample: {img.shape}, Label: {lbl}")
     except Exception as e:
-        print(f"创建 SingleImageDataset 时出错: {e}")
-        print("请确保您已生成了 'landmark' 对应的 MTF 图像，并且路径正确。")
+        print(f"Error creating SingleImageDataset: {e}")
+        print("Please ensure you have generated MTF images for the 'landmark' modality and the path is correct.")
 
-    # --- 测试 VideoSequenceDataset ---
+    # --- Test VideoSequenceDataset ---
     print("\n--- Testing VideoSequenceDataset ---")
     try:
         sequence_dataset = VideoSequenceDataset(
@@ -250,10 +251,11 @@ if __name__ == '__main__':
             subject_list=test_subjects,
             transform=get_default_transforms()
         )
-        print(f"成功创建 Video Sequence Dataset，视频总数: {len(sequence_dataset)}")
-        # 获取第一个视频序列
-        # seq, lbl = sequence_dataset[0]
-        # print(f"第一个序列的形状: {seq.shape}, 标签: {lbl}")
+        print(f"Successfully created Video Sequence Dataset. Total videos: {len(sequence_dataset)}")
+        # To get the first video sequence:
+        # if len(sequence_dataset) > 0:
+        #     seq, lbl = sequence_dataset[0]
+        #     print(f"Shape of the first sequence: {seq.shape}, Label: {lbl}")
     except Exception as e:
-        print(f"创建 VideoSequenceDataset 时出错: {e}")
-        print("请确保您已生成了 'landmark' 和 'rppg' 两种模态的MTF图像，并且路径正确。")
+        print(f"Error creating VideoSequenceDataset: {e}")
+        print("Please ensure you have generated MTF images for both 'landmark' and 'rppg' modalities and the path is correct.")
