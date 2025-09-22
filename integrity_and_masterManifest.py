@@ -100,6 +100,9 @@ class IntegrityCheckerAndManifestCreator:
         output_path = ubfc_phys_path / "master_manifest.csv"
         manifest_df.to_csv(output_path, index=False)
 
+        # TODO(multilevel-labels): 下游数据集在进行“多等级压力分类（T1, T3-ctrl, T3-test）”时，
+        # 应读取此 master_manifest.csv（列：subject, group），
+
         # make a file to store UBFC_data path.
         with open(os.path.join(os.path.dirname(__file__), "UBFC_data_path.txt"), "w") as f:
             f.write(str(data_path))
