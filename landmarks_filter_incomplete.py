@@ -74,7 +74,7 @@ def process_landmark_file(landmark_json_path: Path, video_path: Path, window_sec
     # Handle file operations if in apply mode
     if apply:
         backup_dir.mkdir(exist_ok=True)
-        # Move original file to backup location
+        # Move original file to back up location
         shutil.move(str(landmark_json_path), str(backup_path))
         source_path = backup_path
     else:
