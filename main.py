@@ -78,7 +78,7 @@ def run_faceLandmark_pca_mtf_pipeline():
 
                 # Create output directory for the images
                 output_dir = landmark_path.parent.parent / 'mtf_images' / 'landmark'
-                output_dir.mkdir(exist_ok=True)
+                output_dir.mkdir(parents=True, exist_ok=True)
 
                 for window_data in all_windows_data:
                     window_id = window_data['window_id']
