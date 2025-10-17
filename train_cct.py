@@ -113,7 +113,7 @@ def validate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
         for images, labels in progress_bar:
             # TODO: 将数据移动到指定设备
             images = images.to(device)
-            labels = labels.to(device)
+            labels = labels.to(device, dtype=torch.long)
 
             # TODO: 前向传播
             predictions = model(images)
@@ -131,7 +131,6 @@ def validate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
     avg_loss = total_loss / len(loader)
     accuracy = accuracy_score(all_labels, all_preds, normalize=True)
     f1 = f1_score(all_labels, all_preds, average='macro')
-
 
     return {'val_loss': avg_loss, 'val_acc': accuracy, 'val_f1': f1}
 
@@ -173,7 +172,7 @@ def main(args: argparse.Namespace):
 
     # TODO: 初始化一个列表，用于存储每个 fold 的最佳结果，以便最后计算平均值
     # 然而, 我并不确定论文原文的内容是否是这么实现的, 需要检查笔记确认一下
-    # all_folds_best_metrics = []
+    all_folds_best_metrics = []
 
     # 3. 交叉验证主循环
     for fold_idx, (train_indices, val_indices) in enumerate(kf.split(all_subjects)):
@@ -231,43 +230,37 @@ def main(args: argparse.Namespace):
 
         # d. 训练与验证循环
         # TODO: 初始化用于追踪当前 fold 最佳性能的变量
-        # best_validation_f1 = 0.0
+        best_val_f1 = 0.0
 
         for epoch in range(args.epochs):
             print(f"\nEpoch {epoch + 1}/{args.epochs}")
 
-            # TODO: 调用训练函数
-            # train_metrics = train_one_epoch(...)
-
-            # TODO: 调用验证函数
-            # val_metrics = validate(...)
+            train_metrics = train_one_epoch(model, train_dataLoader, criterion, optimizer, device)
+            val_metrics = validate(model, val_dataLoader, criterion, device)
 
             # TODO: 打印当前 epoch 的训练和验证结果
-            # print(f"Train Loss: {train_metrics['train_loss']:.4f}, Train Acc: {train_metrics['train_acc']:.4f}")
-            # print(f"Val Loss: {val_metrics['val_loss']:.4f}, Val Acc: {val_metrics['val_acc']:.4f}, Val F1: {val_metrics['val_f1']:.4f}")
+            print(f"Train Loss: {train_metrics['train_loss']:.4f}, Train Acc: {train_metrics['train_acc']:.4f}")
+            print(f"Val Loss: {val_metrics['val_loss']:.4f}, Val Acc: {val_metrics['val_acc']:.4f}, Val F1: {val_metrics['val_f1']:.4f}")
 
             # e. 检查并保存最佳模型
-            # current_f1 = val_metrics['val_f1']
-            # if current_f1 > best_val_f1:
-            #    b est_val_f1 = current_f1
-            #    save_path = output_dir / f"cct_{args.modality}_fold_{fold_idx+1}_best.pth"
-            #    torch.save(model.state_dict(), save_path)
-            #    print(f"New best model saved to {save_path} with F1 score: {best_val_f1:.4f}")
-            pass
+            current_f1 = val_metrics['val_f1']
+            if current_f1 > best_val_f1:
+                best_val_f1 = current_f1
+                save_path = output_dir / f"cct_{args.modality}_fold_{fold_idx+1}_best.pth"
+                torch.save(model.state_dict(), save_path)
+                print(f"New best model saved to {save_path} with F1 score: {best_val_f1:.4f}")
 
         # TODO: 记录当前 fold 的最佳 F1 分数
-        # all_folds_best_metrics.append({'fold': fold_idx + 1, 'best_f1': best_val_f1})
-        # print(f"\nBest F1 score for fold {fold_idx + 1}: {best_val_f1:.4f}")
-        pass
+        all_folds_best_metrics.append({'fold': fold_idx + 1, 'best_f1': best_val_f1})
+        print(f"\nBest F1 score for fold {fold_idx + 1}: {best_val_f1:.4f}")
 
     # 4. 总结并打印所有 fold 的平均性能
     # TODO: 计算并打印交叉验证的平均 F1 分数
-    # avg_f1 = np.mean([m['best_f1'] for m in all_folds_best_metrics])
-    # print("\n" + "="*50)
-    # print("Cross-Validation Finished!")
-    # print(f"Average F1 score across 7 folds: {avg_f1:.4f}")
-    # print("="*50)
-    pass
+    avg_f1 = np.mean([m['best_f1'] for m in all_folds_best_metrics])
+    print("\n" + "="*50)
+    print("Cross-Validation Finished!")
+    print(f"Average F1 score across 7 folds: {avg_f1:.4f}")
+    print("="*50)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 UBFC_data_path.txt
 output.log
+weights/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
