@@ -103,6 +103,8 @@ class VideoSequenceDataset(Dataset):
     In this mode, a sample consists of the sequence of all MTF image pairs from a single video.
     """
 
+    MIN_SEQ_LENGTH = 10
+
     def __init__(self, data_root: Path, subject_list: List[str], transform: Callable = None):
         """
         Initializes the dataset by pre-loading and verifying all video sequence paths.
@@ -135,16 +137,36 @@ class VideoSequenceDataset(Dataset):
                     )
                     continue
 
-                landmark_paths = sorted(list(landmark_dir.glob(f'{subject_id}_{level_str}_window_*.png')))
-                rppg_paths = sorted(list(rppg_dir.glob(f'{subject_id}_{level_str}_window_*.png')))
+                landmark_paths = sorted(landmark_dir.glob(f'{subject_id}_{level_str}_window_*.png'))
+                rppg_paths = sorted(rppg_dir.glob(f'{subject_id}_{level_str}_window_*.png'))
 
-                # A valid sequence must have the same number of windows for both modalities and not be empty.
-                if len(landmark_paths) > 0 and len(landmark_paths) == len(rppg_paths):
-                    self.sequences.append((landmark_paths, rppg_paths, label))
-                else:
-                    if len(landmark_paths) != len(rppg_paths):
-                        print(f"Warning: Mismatch in window count for {subject_id}/{level_str}. "
-                              f"Landmark: {len(landmark_paths)}, RPPG: {len(rppg_paths)}. Skipping.")
+                if not landmark_paths and not rppg_paths:
+                    continue
+
+                # 解析 window_id -> 路径
+                def _parse_window_id(path: Path) -> int:
+                    try:
+                        return int(path.stem.split('_')[-1])
+                    except (IndexError, ValueError):
+                        return -1
+
+                lm_map = {wid: p for p in landmark_paths if (wid := _parse_window_id(p)) >= 0}
+                rp_map = {wid: p for p in rppg_paths if (wid := _parse_window_id(p)) >= 0}
+
+                # get the subset of window ids that are common to both landmark and rppg paths
+                common_ids = sorted(set(lm_map.keys()) & set(rp_map.keys()))
+
+                if len(common_ids) < self.MIN_SEQ_LENGTH:
+                    if landmark_paths or rppg_paths:
+                        print(
+                            f"Warning: Insufficient paired windows for {subject_id}/{level_str}. "
+                            f"paired={len(common_ids)}, landmark={len(landmark_paths)}, rppg={len(rppg_paths)}. Skipping."
+                        )
+                    continue
+
+                seq_landmark = [lm_map[i] for i in common_ids]
+                seq_rppg = [rp_map[i] for i in common_ids]
+                self.sequences.append((seq_landmark, seq_rppg, label))
 
     def __len__(self) -> int:
         """Returns the total number of valid video sequences in the dataset."""

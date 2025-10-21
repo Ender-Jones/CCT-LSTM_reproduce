@@ -99,3 +99,37 @@ The dataset is organized as the following structure:
     *   实现序列模型的训练循环，对整个模型（包括CCT和LSTM）进行微调。
 
 
+## 计划与进度（Stage 1/Stage 2）
+
+### 已完成（A. 修正与统一 MTF 生成）
+- 两模态送入 MTF 前统一 z-score；MTF 显式使用 `strategy='quantile'`、`n_bins=8`。
+- rPPG：修复 JSON 列表遍历；实现 `process_rppg_to_mtf`；移除“空图回退”（不合格窗口直接跳过）；当前不下采样（遇性能瓶颈再考虑启用）。
+- landmark：对 PCA 主成分做 z-score；不稳定则跳过窗口；输出仍使用 `cv2.normalize(..., 0, 255)` 归一到 8-bit。
+- 命名一致：`mtf_images/{modality}/{subject}_{level}_window_{id:03d}.png`；Dataset 端统一 `Resize(224,224)`。
+- `VideoSequenceDataset` 已改为“窗口 ID 交集 + `MIN_SEQ_LENGTH=10`”的配对逻辑，避免单模态缺失导致整段丢弃。
+- `main.py process` 支持“缺一模态也可单独生成”——若只存在 landmark 或 rPPG JSON，则仅生成对应模态的 MTF 图。
+
+### 待完成（B–E）
+- C5 小样→全量生成：先对 1–2 个 subject 生成并用 `verify_landmarks_vs_rppg.py` 检查窗口 ID 差集，确认后批量生成 rPPG MTF。
+- C6 Stage 1（rPPG，7 折）：复用 `train_cct.py --modality rppg`，以验证集 macro-F1 选优保存 `weights/cct_rppg_fold_*_best.pth`。
+- D7 Stage 2 任务三分类（7 折）：`train_cct_lstm.py`，加载每折 landmark/rPPG 最优权重；建议 AdamW(+weight_decay)、学习率调度（如 ReduceLROnPlateau）与早停（以 val_f1）。
+- D8–D9 多等级分类（5 折分层）：实现 levels 数据集（仅 T1 与 T3；T3 细分 ctrl/test，来自 master_manifest.csv），`StratifiedKFold(n_splits=5)`；`train_cct_lstm_levels.py`。
+- E10 汇总日志、混淆矩阵与每类 PRF（tasks 与 levels）。
+
+### 隐藏风险与检查点
+- JSON 命名需满足 `vid_{subject}_{level}*.json`；代码通过 `stem.split('_')[2]` 取 level，如命名变更需同步修改。
+- 大窗口 MTF 计算量较高：当前不下采样；若后续出现性能瓶颈，再考虑启用（建议阈值 1024/512）。
+
+### 下一步最小执行清单
+1) 小样生成与 `verify_landmarks_vs_rppg.py` 检查；确认后批量生成 rPPG MTF。
+2) 运行 Stage 1（rPPG，7 折）。
+3) 准备 Stage 2（任务三分类 → 多等级分类）训练脚本与数据。
+
+### To-dos（代码完成/未执行标注）
+- [ ] 为 rPPG JSON 生成 MTF 到 `mtf_images/rppg`（代码已实现，等待小样验证与批量运行）
+- [ ] 校验两模态各 subject/level 窗口数是否一致（运行 verify 脚本）
+- [ ] 运行 rPPG 单模态 CCT 预训练（7 折）
+- [ ] 实现任务三分类的 CCT-LSTM 训练脚本（7 折）
+- [ ] 实现 levels 实验数据集与分层标签（仅 T1 与 T3）
+- [ ] 实现多等级分类的 CCT-LSTM 训练脚本（5 折分层）
+- [ ] 汇总并输出两实验的平均指标、混淆矩阵

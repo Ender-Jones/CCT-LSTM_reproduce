@@ -71,15 +71,19 @@ def run_pca_mtf_pipeline():
                 landmark_path = fpg.get_landmark_path(subject_id, level)
                 rppg_path = fpg.get_rppg_path(subject_id, level)
 
-                if not landmark_path.exists():
-                    print(f"Skipping {subject_id}/{level}: Landmark file not found.")
-                    continue
-                if not rppg_path.exists():
-                    print(f"Skipping {subject_id}/{level}: rPPG file not found.")
+                if not landmark_path.exists() and not rppg_path.exists():
+                    print(f"Skipping {subject_id}/{level}: Neither landmark nor rPPG JSON found.")
                     continue
 
-                processor.process_landmark_to_mtf(landmark_path)
-                processor.process_rppg_to_mtf(rppg_path)
+                if landmark_path.exists():
+                    processor.process_landmark_to_mtf(landmark_path)
+                else:
+                    print(f"Warning: Landmark JSON missing for {subject_id}/{level}, skipped.")
+
+                if rppg_path.exists():
+                    processor.process_rppg_to_mtf(rppg_path)
+                else:
+                    print(f"Warning: rPPG JSON missing for {subject_id}/{level}, skipped.")
 
             except Exception as e:
                 print(f"!!! ERROR processing {subject_id}/{level}: {e}")
