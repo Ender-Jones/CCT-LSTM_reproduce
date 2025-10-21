@@ -24,9 +24,6 @@ class FilePathGen:
         output_path = self.datapath / test_id / f'vid_{test_id}_{level}.avi'
         return output_path
 
-    def bvp_path_gen(self, test_id, level):
-        output_path = self.datapath / test_id / f'bvp_{test_id}_{level}.csv'
-        return output_path
 
     def eda_path_gen(self, test_id, level):
         output_path = self.datapath / test_id / f'eda_{test_id}_{level}.csv'
@@ -39,6 +36,10 @@ class FilePathGen:
     def get_landmark_path(self, subject_id, level):
         # Generate the path for the landmark file.
         output_path = self.datapath / subject_id / 'landmarks' / f"vid_{subject_id}_{level}_landmarks.json"
+        return output_path
+
+    def get_rppg_path(self, subject_id, level):
+        output_path = self.datapath / subject_id / 'rppg_signals' / f"vid_{subject_id}_{level}_rppg.json"
         return output_path
 
     def get_all_video_paths(self, subject_list, level=None):

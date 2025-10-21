@@ -8,7 +8,7 @@ from file_path_gen import FilePathGen
 from integrity_and_masterManifest import IntegrityCheckerAndManifestCreator
 # import all necessary modules
 from landmark_extractor import LandmarkExtractor
-from pca_and_mtf import PCAandMTFProcessor
+from pca_and_mtf import PcaAndMtfProcessor
 
 
 def run_integrity_check():
@@ -49,12 +49,12 @@ def run_landmark_extraction():
     print("--- Landmark Extraction Pipeline Finished ---")
 
 
-def run_faceLandmark_pca_mtf_pipeline():
+def run_pca_mtf_pipeline():
     """The PCA and MTF image generation logic."""
     print("--- Starting PCA and MTF Image Generation ---")
     try:
         fpg = FilePathGen()
-        processor = PCAandMTFProcessor()
+        processor = PcaAndMtfProcessor()
     except FileNotFoundError as e:
         print(f"Error initializing: {e}. Run integrity check first.")
         return
@@ -69,36 +69,17 @@ def run_faceLandmark_pca_mtf_pipeline():
         for level in levels:
             try:
                 landmark_path = fpg.get_landmark_path(subject_id, level)
+                rppg_path = fpg.get_rppg_path(subject_id, level)
+
                 if not landmark_path.exists():
                     print(f"Skipping {subject_id}/{level}: Landmark file not found.")
                     continue
+                if not rppg_path.exists():
+                    print(f"Skipping {subject_id}/{level}: rPPG file not found.")
+                    continue
 
-                with open(landmark_path, 'r') as f:
-                    all_windows_data = json.load(f)
-
-                # Create output directory for the images
-                output_dir = landmark_path.parent.parent / 'mtf_images' / 'landmark'
-                output_dir.mkdir(parents=True, exist_ok=True)
-
-                for window_data in all_windows_data:
-                    window_id = window_data['window_id']
-
-                    # Define output path and check for existence
-                    # Use zero-padding for window_id to ensure correct alphabetical sorting
-                    image_name = f"{subject_id}_{level}_window_{window_id:03d}.png"
-                    output_image_path = output_dir / image_name
-                    if output_image_path.exists():
-                        print(f"Skipping {subject_id}/{level}/window_{window_id}: Image already exists.")
-                        continue
-
-                    landmarks = window_data['landmarks']
-                    if not landmarks:
-                        print(f"Skipping window {window_id} for {subject_id}/{level}: No landmarks found.")
-                        continue
-
-                    # Transform data and save the image
-                    rgb_image = processor.transform(landmarks)
-                    cv2.imwrite(str(output_image_path), cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR))
+                processor.process_landmark_to_mtf(landmark_path)
+                processor.process_rppg_to_mtf(rppg_path)
 
             except Exception as e:
                 print(f"!!! ERROR processing {subject_id}/{level}: {e}")
@@ -119,7 +100,7 @@ def main():
     parser_extract.set_defaults(func=run_landmark_extraction)
 
     parser_process = subparsers.add_parser('process', help='Process Face landmarks into MTF images.')
-    parser_process.set_defaults(func=run_faceLandmark_pca_mtf_pipeline)
+    parser_process.set_defaults(func=run_pca_mtf_pipeline)
 
     args = parser.parse_args()
     args.func()
