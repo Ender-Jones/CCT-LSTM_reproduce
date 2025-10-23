@@ -1,9 +1,5 @@
 import argparse
-import json
-
-import cv2
 import tqdm
-
 from file_path_gen import FilePathGen
 from integrity_and_masterManifest import IntegrityCheckerAndManifestCreator
 # import all necessary modules

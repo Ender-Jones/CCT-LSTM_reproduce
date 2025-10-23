@@ -1,6 +1,0 @@
-name: CCT-LSTM_reproduce
-environments:
-  default:
-    - environment.yml
-variables: {}
-commands: {}
