@@ -89,7 +89,8 @@ class IntegrityCheckerAndManifestCreator:
                     print(f"Error: File '{info_file_path}' has unexpected group value: {lines[2]}.")
                     sys.exit(1)
                 elif lines[0] != subject_id:
-                    print(f"Error: File '{info_file_path}' subject ID mismatch: expected '{subject_id}', found '{lines[0]}'.")
+                    print(
+                        f"Error: File '{info_file_path}' subject ID mismatch: expected '{subject_id}', found '{lines[0]}'.")
                     sys.exit(1)
                 else:
                     group = lines[2]

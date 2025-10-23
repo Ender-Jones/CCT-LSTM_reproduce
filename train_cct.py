@@ -240,13 +240,14 @@ def main(args: argparse.Namespace):
 
             # TODO: 打印当前 epoch 的训练和验证结果
             print(f"Train Loss: {train_metrics['train_loss']:.4f}, Train Acc: {train_metrics['train_acc']:.4f}")
-            print(f"Val Loss: {val_metrics['val_loss']:.4f}, Val Acc: {val_metrics['val_acc']:.4f}, Val F1: {val_metrics['val_f1']:.4f}")
+            print(
+                f"Val Loss: {val_metrics['val_loss']:.4f}, Val Acc: {val_metrics['val_acc']:.4f}, Val F1: {val_metrics['val_f1']:.4f}")
 
             # e. 检查并保存最佳模型
             current_f1 = val_metrics['val_f1']
             if current_f1 > best_val_f1:
                 best_val_f1 = current_f1
-                save_path = output_dir / f"cct_{args.modality}_fold_{fold_idx+1}_best.pth"
+                save_path = output_dir / f"cct_{args.modality}_fold_{fold_idx + 1}_best.pth"
                 torch.save(model.state_dict(), save_path)
                 print(f"New best model saved to {save_path} with F1 score: {best_val_f1:.4f}")
 
@@ -257,10 +258,10 @@ def main(args: argparse.Namespace):
     # 4. 总结并打印所有 fold 的平均性能
     # TODO: 计算并打印交叉验证的平均 F1 分数
     avg_f1 = np.mean([m['best_f1'] for m in all_folds_best_metrics])
-    print("\n" + "="*50)
+    print("\n" + "=" * 50)
     print("Cross-Validation Finished!")
     print(f"Average F1 score across 7 folds: {avg_f1:.4f}")
-    print("="*50)
+    print("=" * 50)
 
 
 if __name__ == '__main__':
