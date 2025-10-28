@@ -5,6 +5,41 @@ import tqdm
 
 from file_path_gen import FilePathGen
 
+"""
+Purpose
+-------
+Verify temporal alignment between per-window Landmark JSON and rPPG JSON for each
+subject/level. It checks two things: (1) window counts are equal; (2) each window's
+start_frame and end_frame match one-to-one after sorting by start_frame.
+
+When to run
+-----------
+- After you have generated both Landmark JSONs (via the landmark extractor) and rPPG JSONs
+  (e.g., pre-exported from pyVHR). Run this script BEFORE converting to MTF at scale to
+  ensure the two modalities are aligned and can form valid pairs.
+
+Expected locations
+------------------
+- Landmark JSON:   <data_root>/sXX/landmarks/vid_{sXX}_{T*}_landmarks.json
+- rPPG JSON:       <data_root>/sXX/rppg_signals/vid_{sXX}_{T*}_rppg.json
+
+How to run
+----------
+1) Ensure `UBFC_data_path.txt` points to `<data_root>` (created by `main.py check`).
+2) Execute:
+   python verify_landmarks_vs_rppg.py
+
+Outcome
+-------
+- For each subject/level pair, prints OK/MISMATCH and the reason.
+- Prints a summary: total compared and #mismatches.
+
+Notes
+-----
+- This is a read-only verification; it will not modify data.
+- If there are mismatches, inspect the listed pairs and consider re-generating JSONs.
+"""
+
 
 def load_json_safely(path: Path):
     """Loads a JSON file, returning None if it doesn't exist or is invalid."""

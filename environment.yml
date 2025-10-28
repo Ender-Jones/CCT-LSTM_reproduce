@@ -6,7 +6,7 @@ channels:
 dependencies:
   - python=3.10
   - pip
-  - numpy=1.26.*            # mediapipe 需要 <2
+  - numpy=1.26.*
   - pandas=2.3.*
   - scikit-learn=1.7.*
   - matplotlib=3.10.*
