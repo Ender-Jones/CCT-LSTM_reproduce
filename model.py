@@ -8,6 +8,7 @@ class CCTForPreTraining(nn.Module):
     Wrapper for the CCT model for the pre-training phase (Stage 1).
     This model takes a single MTF image and performs classification.
     """
+
     def __init__(self,
                  img_size=(224, 224),
                  embedding_dim=256,
@@ -59,6 +60,8 @@ class CCTForPreTraining(nn.Module):
             mlp_ratio=mlp_ratio,
             num_classes=num_classes,
             positional_embedding=positional_embedding,
+            dropout=0.1,
+            emb_dropout=0.1,
             *args, **kwargs
         )
 
@@ -78,6 +81,7 @@ class CCT_LSTM_Model(nn.Module):
     The final CCT-LSTM model for the end-to-end training phase (Stage 2).
     This model processes sequences of MTF image pairs (landmark and rPPG).
     """
+
     def __init__(self,
                  cct_params: dict,
                  lstm_hidden_size: int = 512,
@@ -95,16 +99,13 @@ class CCT_LSTM_Model(nn.Module):
         """
         super().__init__()
         # 1. Initialize two CCT backbones, one for each modality.
-        # We set num_classes=1, but we will replace the final MLP head with an Identity layer
-        # to get the feature embeddings before the classification layer.
-        self.cct_landmark = CCT(num_classes=1, **cct_params)
-        self.cct_rppg = CCT(num_classes=1, **cct_params)
-
-        # Replace the final classification head with an identity mapping
+        # Configure CCT to output embeddings directly with dimension = embedding_dim
+        cct_embedding_dim = cct_params.get('embedding_dim', 256)
+        self.cct_landmark = CCT(num_classes=cct_embedding_dim, **cct_params)
+        self.cct_rppg = CCT(num_classes=cct_embedding_dim, **cct_params)
+        # Replace classification head with Identity so the network outputs pooled embeddings
         self.cct_landmark.mlp_head = nn.Identity()
         self.cct_rppg.mlp_head = nn.Identity()
-
-        cct_embedding_dim = cct_params.get('embedding_dim', 256)
         # The input to the LSTM will be the concatenated features from both CCTs.
         lstm_input_size = cct_embedding_dim * 2
 
@@ -125,19 +126,25 @@ class CCT_LSTM_Model(nn.Module):
         """
         # Load landmark CCT weights
         print(f"Loading pre-trained landmark weights from: {landmark_weights_path}")
-        landmark_state_dict = torch.load(landmark_weights_path)
+        try:
+            landmark_state_dict = torch.load(landmark_weights_path, weights_only=True)
+        except TypeError:
+            # fallback for older torch versions without weights_only
+            landmark_state_dict = torch.load(landmark_weights_path)
         # Filter out the mlp_head weights from the pre-trained model
         landmark_filtered_dict = {k: v for k, v in landmark_state_dict.items() if not k.startswith('cct.mlp_head')}
         self.cct_landmark.load_state_dict(landmark_filtered_dict, strict=False)
 
         # Load rPPG CCT weights
         print(f"Loading pre-trained rPPG weights from: {rppg_weights_path}")
-        rppg_state_dict = torch.load(rppg_weights_path)
+        try:
+            rppg_state_dict = torch.load(rppg_weights_path, weights_only=True)
+        except TypeError:
+            rppg_state_dict = torch.load(rppg_weights_path)
         # Filter out the mlp_head weights
         rppg_filtered_dict = {k: v for k, v in rppg_state_dict.items() if not k.startswith('cct.mlp_head')}
         self.cct_rppg.load_state_dict(rppg_filtered_dict, strict=False)
         print("Pre-trained weights loaded successfully.")
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
