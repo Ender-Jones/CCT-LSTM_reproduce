@@ -1,7 +1,7 @@
 UBFC_data_path.txt
 output.log
 weights/
-stage_plan.md
+reports/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

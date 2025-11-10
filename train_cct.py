@@ -4,6 +4,7 @@ import random
 from pathlib import Path
 import sys
 from typing import Dict, Any, List
+import time
 
 import numpy as np
 import torch
@@ -11,7 +12,7 @@ import torch.nn as nn
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+ 
 
 from dataset import SingleImageDataset, get_default_transforms
 from model import CCTForPreTraining
@@ -56,8 +57,7 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module,
     total_loss = 0.0
     all_preds, all_labels = [], []
 
-    progress_bar = tqdm(loader, desc="Training", leave=False)
-    for images, labels in progress_bar:
+    for images, labels in loader:
         # TODO: 将数据移动到指定设备
         images = images.to(device)
         labels = labels.to(device, dtype=torch.long)
@@ -109,8 +109,7 @@ def validate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
 
     # 在 no_grad 环境下进行，以节省计算资源
     with torch.no_grad():
-        progress_bar = tqdm(loader, desc="Validating", leave=False)
-        for images, labels in progress_bar:
+        for images, labels in loader:
             # TODO: 将数据移动到指定设备
             images = images.to(device)
             labels = labels.to(device, dtype=torch.long)
@@ -142,8 +141,17 @@ def main(args: argparse.Namespace):
     Args:
         args (argparse.Namespace): 从命令行解析的参数。
     """
-    # 1. 设置与初始化
-    set_seed(args.seed)
+    # 1. 设置与初始化（支持随机种子并打印）
+    def _init_and_set_seed(seed_arg: int) -> int:
+        if seed_arg is None or seed_arg < 0:
+            seed = random.randint(0, 2**31 - 1)
+        else:
+            seed = int(seed_arg)
+        print(f"Using seed: {seed}")
+        set_seed(seed)
+        return seed
+
+    used_seed = _init_and_set_seed(args.seed)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -155,7 +163,10 @@ def main(args: argparse.Namespace):
     if args.data_root is not None:
         data_root = Path(args.data_root)
         if data_root.exists() and data_root.is_dir():
-            all_subjects = [d.name for d in data_root.iterdir() if d.is_dir()]
+            all_subjects = sorted(
+                [d.name for d in data_root.iterdir() if d.is_dir()],
+                key=lambda x: int(x[1:]) if len(x) > 1 and x[1:].isdigit() else x
+            )
         else:
             print(f"Data root: {data_root} not found. Please specify a valid data root.")
             sys.exit(1)
@@ -163,12 +174,15 @@ def main(args: argparse.Namespace):
         with open("UBFC_data_path.txt", "r") as f:
             data_root = Path(f.read().strip())
         if data_root.exists() and data_root.is_dir():
-            all_subjects = [d.name for d in data_root.iterdir() if d.is_dir()]
+            all_subjects = sorted(
+                [d.name for d in data_root.iterdir() if d.is_dir()],
+                key=lambda x: int(x[1:]) if len(x) > 1 and x[1:].isdigit() else x
+            )
         else:
             print(f"Data root: {data_root} not found. Please specify a valid data root.")
             sys.exit(1)
 
-    kf = KFold(n_splits=7, shuffle=True, random_state=args.seed)
+    kf = KFold(n_splits=7, shuffle=True, random_state=used_seed)
 
     # TODO: 初始化一个列表，用于存储每个 fold 的最佳结果，以便最后计算平均值
     # 然而, 我并不确定论文原文的内容是否是这么实现的, 需要检查笔记确认一下
@@ -225,23 +239,31 @@ def main(args: argparse.Namespace):
         # TODO: 实例化模型并移动到 device
         model = CCTForPreTraining(num_classes=3).to(device)
         # TODO: 实例化优化器和损失函数
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-        criterion = nn.CrossEntropyLoss()
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
         # d. 训练与验证循环
         # TODO: 初始化用于追踪当前 fold 最佳性能的变量
         best_val_f1 = 0.0
 
+        epoch_times: List[float] = []
         for epoch in range(args.epochs):
-            print(f"\nEpoch {epoch + 1}/{args.epochs}")
+            start_t = time.time()
 
             train_metrics = train_one_epoch(model, train_dataLoader, criterion, optimizer, device)
             val_metrics = validate(model, val_dataLoader, criterion, device)
+            scheduler.step()
 
-            # TODO: 打印当前 epoch 的训练和验证结果
-            print(f"Train Loss: {train_metrics['train_loss']:.4f}, Train Acc: {train_metrics['train_acc']:.4f}")
-            print(
-                f"Val Loss: {val_metrics['val_loss']:.4f}, Val Acc: {val_metrics['val_acc']:.4f}, Val F1: {val_metrics['val_f1']:.4f}")
+            dur = time.time() - start_t
+            epoch_times.append(dur)
+            avg_t = sum(epoch_times) / len(epoch_times)
+            remain = (args.epochs - (epoch + 1)) * avg_t
+
+            print(f"[Fold {fold_idx + 1}] Epoch {epoch + 1}/{args.epochs} | "
+                  f"Train loss={train_metrics['train_loss']:.4f} acc={train_metrics['train_acc']:.4f} | "
+                  f"Val loss={val_metrics['val_loss']:.4f} acc={val_metrics['val_acc']:.4f} f1={val_metrics['val_f1']:.4f} | "
+                  f"time={dur:.2f}s ETA~{remain/60:.1f}m")
 
             # e. 检查并保存最佳模型
             current_f1 = val_metrics['val_f1']
@@ -283,11 +305,12 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=16,
                         help="Batch size for training and validation.")
     parser.add_argument('--lr', type=float, default=1e-4,
-                        help="Learning rate for the optimizer.")
-
+                        help="Learning rate for the optimizer. Default is 1e-4.")
+    parser.add_argument('--wd', type=float, default=1e-4,
+                        help="Weight decay for the optimizer. Default is 1e-4.")
     # 环境与复现性参数
-    parser.add_argument('--seed', type=int, default=42,
-                        help="Random seed for reproducibility.")
+    parser.add_argument('--seed', type=int, default=-1,
+                        help="Random seed. <0 to sample a new random seed per run and print it.")
     parser.add_argument('--device', type=str, default='cuda',
                         help="Device to use for training ('cuda' or 'cpu').")
     parser.add_argument('--num_workers', type=int, default=4, help='Number of DataLoader workers')
