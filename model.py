@@ -24,6 +24,8 @@ class CCTForPreTraining(nn.Module):
                  mlp_ratio=2.,
                  num_classes=3,
                  positional_embedding='learnable',
+                 dropout: float = 0.1,
+                 emb_dropout: float = 0.1,
                  *args, **kwargs):
         """
         Initializes the CCT model for pre-training.
@@ -60,8 +62,8 @@ class CCTForPreTraining(nn.Module):
             mlp_ratio=mlp_ratio,
             num_classes=num_classes,
             positional_embedding=positional_embedding,
-            dropout=0.1,
-            emb_dropout=0.1,
+            dropout=dropout,
+            emb_dropout=emb_dropout,
             *args, **kwargs
         )
 

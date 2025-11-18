@@ -11,6 +11,7 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classifi
 from sklearn.model_selection import StratifiedKFold
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+import wandb
 
 from model import CCT_LSTM_Model
 from dataset import get_default_transforms
@@ -228,6 +229,16 @@ def main(args: argparse.Namespace):
     report_dir = Path(args.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
 
+    wandb_run = None
+    if getattr(args, "use_wandb", False):
+        wandb_config = vars(args).copy()
+        wandb_config["used_seed"] = used_seed
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config=wandb_config,
+        )
+
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=used_seed)
 
     cct_params = dict(
@@ -243,9 +254,15 @@ def main(args: argparse.Namespace):
         num_layers=6,
         num_heads=4,
         mlp_ratio=2.0,
-        positional_embedding='learnable'
+        positional_embedding='learnable',
+        dropout=args.dropout,
+        emb_dropout=args.emb_dropout
     )
     transform = get_default_transforms()
+
+    fold_best_f1s: List[float] = []
+    best_epochs: List[int] = []
+    best_overfit_gaps: List[float] = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(skf.split(subjects, y_strat), start=1):
         print("\n" + "=" * 60)
@@ -312,6 +329,8 @@ def main(args: argparse.Namespace):
         best_val_f1 = -1.0
         best_path = output_dir / f"cctlstm_levels_fold_{fold_idx}_best.pth"
         epochs_no_improve = 0
+        best_epoch_for_fold = None
+        best_overfit_gap_for_fold = None
 
         for epoch in range(1, args.epochs + 1):
             print(f"\nEpoch {epoch}/{args.epochs}")
@@ -321,6 +340,22 @@ def main(args: argparse.Namespace):
             print(f"Val  : loss={val_metrics['val_loss']:.4f} acc={val_metrics['val_acc']:.4f} f1={val_metrics['val_f1']:.4f}")
 
             scheduler.step(val_metrics['val_f1'])
+            if wandb_run is not None:
+                current_lr = optimizer.param_groups[0]["lr"]
+                wandb.log(
+                    {
+                        "fold": fold_idx,
+                        "epoch": epoch,
+                        "train_loss": train_metrics["train_loss"],
+                        "train_acc": train_metrics["train_acc"],
+                        "train_f1": train_metrics["train_f1"],
+                        "val_loss": val_metrics["val_loss"],
+                        "val_acc": val_metrics["val_acc"],
+                        "val_f1": val_metrics["val_f1"],
+                        "overfit_gap": train_metrics["train_acc"] - val_metrics["val_acc"],
+                        "learning_rate": current_lr,
+                    }
+                )
             if val_metrics['val_f1'] > best_val_f1 + 1e-6:
                 best_val_f1 = val_metrics['val_f1']
                 epochs_no_improve = 0
@@ -331,6 +366,14 @@ def main(args: argparse.Namespace):
                 with open(fold_dir / "classification_report.txt", "w") as f:
                     f.write(report)
                 print(f"[BEST] Saved model to {best_path} (val_f1={best_val_f1:.4f})")
+                best_epoch_for_fold = epoch
+                best_overfit_gap_for_fold = train_metrics["train_acc"] - val_metrics["val_acc"]
+                if wandb_run is not None:
+                    wandb.run.summary[f"best_val_f1_fold_{fold_idx}"] = float(best_val_f1)
+                    wandb.run.summary[f"best_epoch_fold_{fold_idx}"] = best_epoch_for_fold
+                    wandb.run.summary[f"overfit_gap_fold_{fold_idx}"] = best_overfit_gap_for_fold
+                    wandb.run.summary[f"confusion_matrix_fold_{fold_idx}"] = cm.tolist()
+                    wandb.run.summary[f"classification_report_fold_{fold_idx}"] = report
             else:
                 epochs_no_improve += 1
 
@@ -339,6 +382,31 @@ def main(args: argparse.Namespace):
                 break
 
         print(f"Fold {fold_idx} best val_f1: {best_val_f1:.4f}")
+        if best_val_f1 >= 0.0:
+            fold_best_f1s.append(best_val_f1)
+        if best_epoch_for_fold is not None:
+            best_epochs.append(best_epoch_for_fold)
+        if best_overfit_gap_for_fold is not None:
+            best_overfit_gaps.append(best_overfit_gap_for_fold)
+
+    if fold_best_f1s:
+        avg_best_f1 = float(np.mean(fold_best_f1s))
+        print("\n" + "=" * 60)
+        print(f"Average best val_f1 across folds: {avg_best_f1:.4f}")
+        if wandb_run is not None:
+            wandb.run.summary["avg_val_f1_5fold"] = avg_best_f1
+    if best_epochs:
+        avg_best_epoch = float(np.mean(best_epochs))
+        print(f"Average best epoch across folds: {avg_best_epoch:.2f}")
+        if wandb_run is not None:
+            wandb.run.summary["avg_best_epoch"] = avg_best_epoch
+    if best_overfit_gaps:
+        avg_overfit_gap = float(np.mean(best_overfit_gaps))
+        print(f"Average overfit gap (train_acc - val_acc): {avg_overfit_gap:.4f}")
+        if wandb_run is not None:
+            wandb.run.summary["avg_overfit_gap"] = avg_overfit_gap
+    if wandb_run is not None:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":
@@ -364,6 +432,16 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=-1)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--freeze-cct', action='store_true', help='Freeze CCT backbones and train only LSTM+head')
+    # CCT 正则参数
+    parser.add_argument('--dropout', type=float, default=0.1, help='CCT dropout (default 0.1)')
+    parser.add_argument('--emb-dropout', type=float, default=0.1, help='CCT embedding dropout (default 0.1)')
+
+    parser.add_argument('--use-wandb', action='store_true',
+                        help='Enable logging to Weights & Biases (default: False).')
+    parser.add_argument('--wandb-project', type=str, default='cct_lstm_levels',
+                        help='wandb project name.')
+    parser.add_argument('--wandb-run-name', type=str, default=None,
+                        help='Optional wandb run name.')
 
     args = parser.parse_args()
     main(args)
