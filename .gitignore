@@ -2,6 +2,10 @@ UBFC_data_path.txt
 output.log
 weights/
 reports/
+wandb/
+logs/
+*.pyc
+.specstory/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

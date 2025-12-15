@@ -6,7 +6,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from file_path_gen import FilePathGen
+from preprocessing.file_path_gen import FilePathGen
 
 
 class SingleImageDataset(Dataset):

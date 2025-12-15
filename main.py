@@ -1,10 +1,10 @@
 import argparse
 import tqdm
-from file_path_gen import FilePathGen
-from integrity_and_masterManifest import IntegrityCheckerAndManifestCreator
+from preprocessing.file_path_gen import FilePathGen
+from preprocessing.integrity_and_masterManifest import IntegrityCheckerAndManifestCreator
 # import all necessary modules
-from landmark_extractor import LandmarkExtractor
-from pca_and_mtf import PcaAndMtfProcessor
+from preprocessing.landmark_extractor import LandmarkExtractor
+from preprocessing.pca_and_mtf import PcaAndMtfProcessor
 
 
 def run_integrity_check():

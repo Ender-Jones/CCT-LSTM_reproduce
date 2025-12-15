@@ -104,13 +104,17 @@ class IntegrityCheckerAndManifestCreator:
         # TODO(multilevel-labels): 下游数据集在进行“多等级压力分类（T1, T3-ctrl, T3-test）”时，
         # 应读取此 master_manifest.csv（列：subject, group），
 
-        # make a file to store UBFC_data path.
-        with open(os.path.join(os.path.dirname(__file__), "UBFC_data_path.txt"), "w") as f:
+        # make a file to store UBFC_data path in the REPO ROOT.
+        repo_root = Path(__file__).resolve().parent.parent
+        config_output_path = repo_root / "UBFC_data_path.txt"
+        
+        with open(config_output_path, "w") as f:
             f.write(str(data_path))
 
         print("\n======================================================")
         print("Integrity Check Finished, Master Manifest created！")
         print(f"Master manifest path: {output_path}")
+        print(f"Config file created at: {config_output_path}")
         print("Preview:")
         print(manifest_df.head())
         print("======================================================")

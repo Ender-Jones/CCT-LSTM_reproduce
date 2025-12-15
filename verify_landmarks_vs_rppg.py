@@ -3,7 +3,7 @@ from pathlib import Path
 import argparse
 import tqdm
 
-from file_path_gen import FilePathGen
+from preprocessing.file_path_gen import FilePathGen
 
 """
 Purpose

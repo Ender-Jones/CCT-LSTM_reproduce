@@ -12,9 +12,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import wandb
 
-from dataset import VideoSequenceDataset, get_default_transforms
-from model import CCT_LSTM_Model
-from file_path_gen import FilePathGen
+from preprocessing.dataset import VideoSequenceDataset, get_default_transforms
+from model.model import CCT_LSTM_Model
+from preprocessing.file_path_gen import FilePathGen
 
 
 """

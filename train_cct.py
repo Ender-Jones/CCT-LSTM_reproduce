@@ -16,9 +16,9 @@ from torchvision import transforms
 import wandb
  
 
-from dataset import SingleImageDataset, get_default_transforms
-from model import CCTForPreTraining
-from file_path_gen import FilePathGen
+from preprocessing.dataset import SingleImageDataset, get_default_transforms
+from model.model import CCTForPreTraining
+from preprocessing.file_path_gen import FilePathGen
 
 
 def set_seed(seed: int):

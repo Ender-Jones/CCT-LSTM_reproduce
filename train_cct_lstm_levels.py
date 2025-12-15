@@ -13,9 +13,9 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 import wandb
 
-from model import CCT_LSTM_Model
-from dataset import get_default_transforms
-from file_path_gen import FilePathGen
+from model.model import CCT_LSTM_Model
+from preprocessing.dataset import get_default_transforms
+from preprocessing.file_path_gen import FilePathGen
 
 
 """

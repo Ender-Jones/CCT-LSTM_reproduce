@@ -3,16 +3,26 @@ from pathlib import Path
 
 class FilePathGen:
     # Dynamically generate file paths for UBFC-Phys dataset.
-    def __init__(self, config_path: str = "UBFC_data_path.txt"):
-        self.datapath_config = Path(config_path)
+    def __init__(self, config_path=None):
+        """
+        Args:
+            config_path: Path to the config file. If None, looks in the repo root.
+        """
+        repo_root = Path(__file__).resolve().parent.parent
+        
+        if config_path is None:
+            self.datapath_config = repo_root / "UBFC_data_path.txt"
+        else:
+            self.datapath_config = Path(config_path)
+
         if not self.datapath_config.is_file():
             raise FileNotFoundError(
-                f"Configuration file {config_path} not found."
-                f"Please run 'integrity_and_masterManifest.py' first."
+                f"Configuration file {self.datapath_config} not found.\n"
+                f"Please run 'preprocessing/integrity_and_masterManifest.py' first."
             )
 
         # Read the data path from text file.
-        with open('UBFC_data_path.txt', 'r') as f:
+        with open(self.datapath_config, 'r') as f:
             self.datapath = Path(f.read().strip())
 
     def get_subject_list(self):
