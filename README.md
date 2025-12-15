@@ -178,9 +178,7 @@ CCT-LSTM_reproduce/
 │
 ├── environment.yml             # Conda environment specification
 ├── UBFC_data_path.txt          # Auto-generated dataset path config (git-ignored)
-├── README.md                   # This file
-├── README_research.md          # Technical details on tensor flow & training
-└── TODO_LIST.md                # Known technical debt
+└──  README.md                   # This file
 ```
 
 ---
@@ -405,7 +403,6 @@ The Levels classification task (T1 vs T3-ctrl vs T3-test) is more challenging. I
 
 ## 9. References
 
-- **Technical Details**: See `README_research.md` for tensor flow diagrams and training workflow explanations.
 - **Dataset**: [UBFC-Phys](https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html)
 - **Original Paper**: Ziaratnia et al., "Multimodal Deep Learning for Remote Stress Estimation Using CCT-LSTM", 2024.
 
