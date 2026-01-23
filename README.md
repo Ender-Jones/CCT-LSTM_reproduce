@@ -17,10 +17,11 @@ Tested on Python 3.10 / CUDA 12.1 with conda. WandB logging is optional.
 4. [Stage 1: CCT Pre-training](#4-stage-1-cct-pre-training)
 5. [Stage 2: CCT-LSTM Fine-tuning](#5-stage-2-cct-lstm-fine-tuning)
 6. [One-shot Pipeline Runner](#6-one-shot-pipeline-runner)
-7. [WandB Logging](#7-wandb-logging)
-8. [Known Issues & Tips](#8-known-issues--tips)
-9. [References and Citation](#9-references-and-citation)
-10. [License](#10-license)
+7. [EDA Visualization Scripts](#7-eda-visualization-scripts-optional)
+8. [WandB Logging](#8-wandb-logging)
+9. [Known Issues & Tips](#9-known-issues--tips)
+10. [References and Citation](#10-references-and-citation)
+11. [License](#11-license)
 
 ---
 
@@ -167,7 +168,12 @@ CCT-LSTM_reproduce/
 │   └── rppg_extractor.py       # rPPG signal extraction (reference implementation)
 │
 ├── scripts/
-│   └── run_final_report.sh     # One-shot pipeline runner
+│   ├── run_final_report.sh              # One-shot pipeline runner
+│   └── dataset_visualization/           # EDA/HRV exploratory analysis tools
+│       ├── data_mining_common.py        # Shared utilities and constants
+│       ├── eda_mining.py                # Feature extraction (EDA tonic, HR/HRV)
+│       ├── eda_visual_subject_line.py   # Per-subject signal visualization
+│       └── eda_visual_task_scatter.py   # Cross-subject task comparison
 │
 ├── utils/
 │   └── summarize_reports.py    # Report summarization utility
@@ -190,9 +196,8 @@ CCT-LSTM_reproduce/
 
 Train the CCT (Compact Convolutional Transformer) backbone on single-modality MTF images with 7-fold cross-validation.
 
-### 4.1 Train Landmark Branch
-
 ```bash
+# Train landmark branch (replace 'landmark' with 'rppg' for rPPG branch)
 python train_cct.py \
   --modality landmark \
   --epochs 100 \
@@ -202,63 +207,16 @@ python train_cct.py \
   --emb-dropout 0.3 \
   --early-stop-patience 60 \
   --batch-size 16 \
-  --num_workers 12 \
   --device cuda \
   --use-cutout \
-  --cutout-n-holes 2 \
-  --cutout-length 32 \
   --use-noise \
-  --noise-std 0.02 \
   --use-wandb \
-  --wandb-project cct_pretraining_landmark \
-  --wandb-run-name landmark_run_1
+  --wandb-project cct_pretraining
 ```
 
-### 4.2 Train rPPG Branch
+**Outputs**: `weights/cct_{modality}_fold_{k}_best.pth` (k = 1 to 7)
 
-```bash
-python train_cct.py \
-  --modality rppg \
-  --epochs 100 \
-  --lr 5e-6 \
-  --wd 2e-3 \
-  --dropout 0.3 \
-  --emb-dropout 0.3 \
-  --early-stop-patience 60 \
-  --batch-size 16 \
-  --num_workers 12 \
-  --device cuda \
-  --use-cutout \
-  --cutout-n-holes 2 \
-  --cutout-length 32 \
-  --use-noise \
-  --noise-std 0.02 \
-  --use-wandb \
-  --wandb-project cct_pretraining_rppg \
-  --wandb-run-name rppg_run_1
-```
-
-### 4.3 Outputs
-
-- **Weights**: `weights/cct_{modality}_fold_{k}_best.pth` (k = 1 to 7)
-- **Logs**: Training progress printed to console and optionally logged to WandB.
-
-### 4.4 Key Command-Line Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--modality` | (required) | `landmark` or `rppg` |
-| `--data-root` | None | Path to dataset root; if omitted, reads from `UBFC_data_path.txt` |
-| `--epochs` | 100 | Maximum training epochs per fold |
-| `--lr` | 1e-4 | Learning rate |
-| `--wd` | 1e-4 | Weight decay |
-| `--dropout` | 0.1 | CCT dropout rate |
-| `--emb-dropout` | 0.1 | CCT embedding dropout rate |
-| `--early-stop-patience` | 30 | Early stopping patience (0 to disable) |
-| `--use-cutout` | False | Enable random cutout augmentation |
-| `--use-noise` | False | Enable Gaussian noise augmentation |
-| `--use-mixup` | False | Enable Mixup augmentation |
-| `--use-wandb` | False | Enable WandB logging |
+> For all available options: `python train_cct.py --help`
 
 ---
 
@@ -268,70 +226,37 @@ Fine-tune the full CCT-LSTM model on multimodal (landmark + rPPG) sequences. Sta
 
 ### 5.1 Task Classification (T1/T2/T3) — 7-fold CV
 
-Classifies stress levels across all three experimental tasks.
-
 ```bash
 python train_cct_lstm.py \
   --epochs 100 \
   --lr 5e-5 \
-  --weight-decay 1e-4 \
   --lstm-hidden-size 512 \
-  --lstm-num-layers 2 \
   --dropout 0.3 \
-  --emb-dropout 0.3 \
   --early-stop-patience 30 \
-  --stage1-weights-dir weights \
-  --output-dir weights \
   --report-dir reports/tasks \
   --device cuda \
-  --num-workers 12 \
-  --use-wandb \
-  --wandb-project cct_lstm_tasks \
-  --wandb-run-name tasks_run_1
+  --use-wandb
 ```
 
-**Outputs**:
-- `weights/cctlstm_tasks_fold_{k}_best.pth`
-- `reports/tasks/fold_{k}/confusion_matrix.npy`
-- `reports/tasks/fold_{k}/classification_report.txt`
+**Outputs**: `weights/cctlstm_tasks_fold_{k}_best.pth`, `reports/tasks/fold_{k}/`
 
 ### 5.2 Level Classification (T1 / T3-ctrl / T3-test) — 5-fold Stratified CV
-
-Classifies stress levels distinguishing control vs. test group responses.
 
 ```bash
 python train_cct_lstm_levels.py \
   --epochs 100 \
   --lr 5e-5 \
-  --weight-decay 1e-4 \
   --lstm-hidden-size 512 \
-  --lstm-num-layers 2 \
   --dropout 0.3 \
-  --emb-dropout 0.3 \
   --early-stop-patience 20 \
-  --stage1-weights-dir weights \
-  --output-dir weights \
   --report-dir reports/levels \
   --device cuda \
-  --num-workers 12 \
-  --use-wandb \
-  --wandb-project cct_lstm_levels \
-  --wandb-run-name levels_run_1
+  --use-wandb
 ```
 
-**Outputs**:
-- `weights/cctlstm_levels_fold_{k}_best.pth`
-- `reports/levels/fold_{k}/confusion_matrix.npy`
-- `reports/levels/fold_{k}/classification_report.txt`
+**Outputs**: `weights/cctlstm_levels_fold_{k}_best.pth`, `reports/levels/fold_{k}/`
 
-### 5.3 Key Command-Line Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--stage1-weights-dir` | `weights` | Directory containing Stage 1 weights |
-| `--lstm-hidden-size` | 512 | LSTM hidden dimension |
-| `--lstm-num-layers` | 2 | Number of LSTM layers |
-| `--freeze-cct` | False | Freeze CCT backbones (train LSTM + classifier only) |
+> For all available options: `python train_cct_lstm.py --help` or `python train_cct_lstm_levels.py --help`
 
 ---
 
@@ -356,7 +281,42 @@ bash scripts/run_final_report.sh
 
 ---
 
-## 7. WandB Logging
+## 7. EDA Visualization Scripts (Optional)
+
+Scripts under `scripts/dataset_visualization/` provide exploratory data analysis tools for the UBFC-Phys physiological signals (EDA and BVP/PPG). These are **optional** and not required for model training.
+
+### 7.1 Setup
+
+Create a dataset path file in the scripts directory:
+
+```bash
+echo "/path/to/UBFC-Phys/Data" > scripts/dataset_visualization/UBFC_path.txt
+```
+
+### 7.2 Available Scripts
+
+| Script | Description |
+|--------|-------------|
+| `eda_mining.py` | Extract EDA tonic/phasic and HR/HRV features, generate scatter plots and merged CSV |
+| `eda_visual_subject_line.py` | Visualize single subject's EDA signals (Raw, Tonic, Phasic) across tasks |
+| `eda_visual_task_scatter.py` | Cross-subject task comparison using SCR features |
+
+### 7.3 Usage
+
+```bash
+cd scripts/dataset_visualization
+python eda_mining.py                  # Feature extraction and correlation plots
+python eda_visual_subject_line.py     # Per-subject signal visualization
+python eda_visual_task_scatter.py     # Task comparison scatter plots
+```
+
+**Outputs**:
+- `eda_results/` — Per-subject visualizations
+- `data_mining/` — Merged feature CSV and correlation plots
+
+---
+
+## 8. WandB Logging
 
 Enable experiment tracking with Weights & Biases:
 
@@ -373,9 +333,9 @@ All training scripts support:
 
 ---
 
-## 8. Known Issues & Tips
+## 9. Known Issues & Tips
 
-### 8.1 Class Collapse in Levels Task
+### 9.1 Class Collapse in Levels Task
 
 The Levels classification task (T1 vs T3-ctrl vs T3-test) is more challenging. If you observe:
 - `val_f1` stuck at ~0.22 (random baseline for 3 classes)
@@ -386,27 +346,27 @@ The Levels classification task (T1 vs T3-ctrl vs T3-test) is more challenging. I
 - Larger LSTM hidden size (e.g., `512` instead of `256`)
 - Reduce regularization (lower dropout, lower weight decay)
 
-### 8.2 Path Configuration
+### 9.2 Path Configuration
 
 - `UBFC_data_path.txt` must exist in the repo root.
 - Generated automatically by `python main.py check`.
 - If you move the dataset, re-run the integrity check.
 
-### 8.3 Missing Data
+### 9.3 Missing Data
 
 - `s40`: Missing `vid_s40_T3.avi` — This appears to be a naming error within the dataset itself.
 - `s56`: Missing self-report file, s55 & s56 are identical. — ignored since self-reports are not used.
 
-### 8.4 GPU Memory
+### 9.4 GPU Memory
 
 - Stage 2 processes variable-length sequences with batch size = 1.
 - If you encounter OOM errors, reduce `--num-workers` or sequence length.
 
 ---
 
-## 9. References and Citation
+## 10. References and Citation
 
-### 9.1 Original Paper
+### 10.1 Original Paper
 
 If you use this code, please cite the original paper:
 
@@ -421,17 +381,17 @@ If you use this code, please cite the original paper:
 }
 ```
 
-### 9.2 Dataset
+### 10.2 Dataset
 
 - **UBFC-Phys**: [Download Link](https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html)
 
-### 9.3 Implementation Notes
+### 10.3 Implementation Notes
 
 **rPPG Extraction**: Although the paper references "Face2PPG" methodology, personal communication with the authors clarified that they utilized the [pyVHR](https://github.com/phuselab/pyVHR) library directly for rPPG extraction, including its OMIT algorithm and ROI handling, without additional modifications. This repository therefore provides a reference implementation based on pyVHR to maintain fidelity to the authors' actual workflow. See `preprocessing/rppg_extractor.py` for details.
 
 ---
 
-## 10. License
+## 11. License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
