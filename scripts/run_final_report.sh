@@ -1,8 +1,11 @@
 #!/bin/bash
 set -e  # Exit immediately if a command exits with a non-zero status.
 
-# Ensure conda environment is active
-source ~/Applications/miniconda3/etc/profile.d/conda.sh 2>/dev/null || true
+# Ensure conda environment is active (dynamically locate conda)
+CONDA_BASE=$(conda info --base 2>/dev/null)
+if [ -n "$CONDA_BASE" ]; then
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+fi
 conda activate cctlstm
 
 mkdir -p logs

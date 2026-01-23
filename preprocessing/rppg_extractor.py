@@ -64,6 +64,26 @@ supported pipeline in this repository starts from the already-exported rPPG JSON
 and converts them into MTF images.
 """
 
+
+def get_dataset_path() -> Path:
+    """Read dataset path from UBFC_data_path.txt config file.
+    
+    Returns:
+        Path: The dataset root path (e.g., .../UBFC-Phys/Data).
+        
+    Raises:
+        FileNotFoundError: If the config file does not exist.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    config_path = repo_root / "UBFC_data_path.txt"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Config file not found: {config_path}\n"
+            "Please run 'python main.py check' first to set up the dataset path."
+        )
+    return Path(config_path.read_text().strip())
+
+
 class RppgExtractor:
     def __init__(self, window_length_sec=60, step_length_sec=5, device='CPU'):
         """
@@ -197,22 +217,28 @@ class RppgExtractor:
 
 def process_dataset():
     """
-    这是一个专用于论文复现的处理函数。
-    它会根据 UBFC-Phys 数据集的特定结构查找视频并提取rPPG信号。
+    Process the UBFC-Phys dataset to extract rPPG signals from all videos.
+    
+    This function reads the dataset path from UBFC_data_path.txt (created by
+    'python main.py check'), iterates over all subject videos, and extracts
+    rPPG signals using the pyVHR OMIT algorithm.
     """
-    # --- 1. 配置区域 ---
-    # !! 重要: 请在这里设置您的数据集根目录 !!
-    # 该目录应包含 s1, s2, ... 等子目录
-    DATASET_ROOT_PATH = Path("/mnt/f/DataSet/UBFC-Phys/Data")  # <--- 根据您的截图设置
+    # --- 1. Configuration ---
+    # Read dataset path from config file (same mechanism as FilePathGen)
+    try:
+        DATASET_ROOT_PATH = get_dataset_path()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return
 
-    # -- 论文复现的固定参数 --
+    # Fixed parameters for paper reproduction
     WINDOW_LENGTH_SEC = 60
     STEP_LENGTH_SEC = 5
     DEVICE = "CPU"  
 
-    # --- 2. 逻辑：根据数据集结构生成视频文件列表 ---
+    # --- 2. Build video file list based on dataset structure ---
     if not DATASET_ROOT_PATH.exists():
-        print(f"错误: 数据集根目录不存在: {DATASET_ROOT_PATH}")
+        print(f"Error: Dataset root path does not exist: {DATASET_ROOT_PATH}")
         return
 
     print("正在根据 UBFC-Phys 结构查找视频文件...")
