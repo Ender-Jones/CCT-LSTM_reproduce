@@ -179,7 +179,9 @@ CCT-LSTM_reproduce/
 │
 ├── environment.yml             # Conda environment specification
 ├── UBFC_data_path.txt          # Auto-generated dataset path config (git-ignored)
-└──  README.md                   # This file
+├── THIRD_PARTY_LICENSES.md     # Third-party dependency licenses
+├── LICENSE                     # MIT License
+└── README.md                   # This file
 ```
 
 ---
