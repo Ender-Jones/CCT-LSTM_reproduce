@@ -19,7 +19,8 @@ Tested on Python 3.10 / CUDA 12.1 with conda. WandB logging is optional.
 6. [One-shot Pipeline Runner](#6-one-shot-pipeline-runner)
 7. [WandB Logging](#7-wandb-logging)
 8. [Known Issues & Tips](#8-known-issues--tips)
-9. [References](#9-references)
+9. [References and Citation](#9-references-and-citation)
+10. [License](#10-license)
 
 ---
 
@@ -391,8 +392,8 @@ The Levels classification task (T1 vs T3-ctrl vs T3-test) is more challenging. I
 
 ### 8.3 Missing Data
 
-- `s40`: Missing `vid_s40_T3.avi` — this subject's T3 data will be skipped.
-- `s56`: Missing self-report file — ignored since self-reports are not used.
+- `s40`: Missing `vid_s40_T3.avi` — This appears to be a naming error within the dataset itself.
+- `s56`: Missing self-report file, s55 & s56 are identical. — ignored since self-reports are not used.
 
 ### 8.4 GPU Memory
 
@@ -401,13 +402,35 @@ The Levels classification task (T1 vs T3-ctrl vs T3-test) is more challenging. I
 
 ---
 
-## 9. References
+## 9. References and Citation
 
-- **Dataset**: [UBFC-Phys](https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html)
-- **Original Paper**: Ziaratnia et al., "Multimodal Deep Learning for Remote Stress Estimation Using CCT-LSTM", 2024.
+### 9.1 Original Paper
+
+If you use this code, please cite the original paper:
+
+```bibtex
+@inproceedings{ziaratnia2024multimodal,
+  title={Multimodal Deep Learning for Remote Stress Estimation Using CCT-LSTM},
+  author={Ziaratnia, Sayyedjavad and Laohakangvalvit, Tipporn and Sugaya, Midori and Sripian, Peeraya},
+  booktitle={Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)},
+  pages={8321--8329},
+  year={2024},
+  doi={10.1109/WACV57701.2024.00815}
+}
+```
+
+### 9.2 Dataset
+
+- **UBFC-Phys**: [Download Link](https://search-data.ubfc.fr/FR-18008901306731-2022-05-05_UBFC-Phys-A-Multimodal-Dataset-For.html)
+
+### 9.3 Implementation Notes
+
+**rPPG Extraction**: Although the paper references "Face2PPG" methodology, personal communication with the authors clarified that they utilized the [pyVHR](https://github.com/phuselab/pyVHR) library directly for rPPG extraction, including its OMIT algorithm and ROI handling, without additional modifications. This repository therefore provides a reference implementation based on pyVHR to maintain fidelity to the authors' actual workflow. See `preprocessing/rppg_extractor.py` for details.
 
 ---
 
-## License
+## 10. License
 
-This repository is for research and educational purposes. Please cite the original UBFC-Phys dataset and CCT-LSTM paper if you use this code in your work.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Please cite the original UBFC-Phys dataset and CCT-LSTM paper if you use this code in your work.
