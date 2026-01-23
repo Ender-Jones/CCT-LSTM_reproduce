@@ -432,7 +432,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=-1)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--freeze-cct', action='store_true', help='Freeze CCT backbones and train only LSTM+head')
-    # CCT 正则参数
+    # CCT regularization parameters
     parser.add_argument('--dropout', type=float, default=0.1, help='CCT dropout (default 0.1)')
     parser.add_argument('--emb-dropout', type=float, default=0.1, help='CCT embedding dropout (default 0.1)')
 

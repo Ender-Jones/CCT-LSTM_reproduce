@@ -87,117 +87,117 @@ def get_dataset_path() -> Path:
 class RppgExtractor:
     def __init__(self, window_length_sec=60, step_length_sec=5, device='CPU'):
         """
-        初始化 rPPG 提取器。
+        Initialize the rPPG extractor.
 
         Args:
-            window_length_sec (int): 滑动窗口的长度（秒）。
-            step_length_sec (int): 窗口滑动的步长（秒）。
-            device (str): 运行设备 ('CPU' or 'GPU')。
+            window_length_sec (int): Length of the sliding window in seconds.
+            step_length_sec (int): Step size for window sliding in seconds.
+            device (str): Compute device ('CPU' or 'GPU').
         """
         self.window_length_sec = window_length_sec
         self.step_length_sec = step_length_sec
 
-        # --- 规范化 device，避免大小写导致误入 GPU 分支 ---
+        # --- Normalize device string to avoid case-sensitivity issues ---
         device_norm = str(device).upper()
         if device_norm not in ('CPU', 'GPU'):
-            print(f"[WARN] 未知的 device='{device}', 已回退到 'CPU'")
+            print(f"[WARN] Unknown device='{device}', falling back to 'CPU'")
             device_norm = 'CPU'
 
-        # 传给 torch.load 的设备标识（小写）
+        # Device identifier for torch.load (lowercase)
         torch_device = 'cuda' if device_norm == 'GPU' else 'cpu'
 
-        # --- 初始化 pyVHR 核心组件 ---
-        print("正在初始化 pyVHR 组件...")
-        # 构造时使用小写，避免 torch.device('CPU') 报错
+        # --- Initialize pyVHR core components ---
+        print("Initializing pyVHR components...")
+        # Use lowercase during construction to avoid torch.device('CPU') error
         skin_extractor = SkinExtractionFaceParsing(device=torch_device)
-        # 立刻覆盖成大写，匹配库内部 self.device == 'CPU' / 'GPU' 判断
+        # Immediately override to uppercase to match library's internal device checks
         skin_extractor.device = device_norm
         self.signal_processor = SignalProcessing()
         self.signal_processor.set_skin_extractor(skin_extractor)
-        print("pyVHR 组件初始化完成。")
+        print("pyVHR components initialized.")
 
     @staticmethod
     def _get_video_metadata(video_path):
-        """辅助函数: 获取视频的FPS和总帧数"""
+        """Helper function: Get the FPS and total frame count of a video."""
         capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
-            raise IOError(f"无法打开视频文件: {video_path}")
+            raise IOError(f"Unable to open video file: {video_path}")
         fps = capture.get(cv2.CAP_PROP_FPS)
         total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
         capture.release()
         if fps == 0 or total_frames == 0:
-            raise ValueError(f"视频文件可能已损坏或元数据无效: {video_path}")
+            raise ValueError(f"Video file may be corrupted or has invalid metadata: {video_path}")
         return fps, total_frames
 
     def extract_and_save_signals_from_video(self, video_path, output_dir):
         """
-        处理单个视频,提取所有窗口的rPPG信号并保存到文件。
+        Process a single video, extract rPPG signals for all windows and save to file.
 
         Args:
-            video_path (Path): 输入视频文件的路径。
-            output_dir (Path): 保存输出JSON文件的目录。
+            video_path (Path): Path to the input video file.
+            output_dir (Path): Directory to save the output JSON file.
         """
         try:
             fps, total_frames = self._get_video_metadata(video_path)
         except (IOError, ValueError) as e:
-            print(f"错误: {e}")
+            print(f"Error: {e}")
             return
 
-        # 定义输出文件路径，并检查是否已存在
+        # Define output file path and check if it already exists
         output_dir.mkdir(parents=True, exist_ok=True)
         json_file_path = output_dir / f"{video_path.stem}_rppg.json"
         if json_file_path.exists():
-            print(f"文件已存在，跳过: {json_file_path}")
+            print(f"File already exists, skipping: {json_file_path}")
             return
 
-        # --- 步骤 1: 一次性提取整个视频的原始RGB信号 ---
-        # 这是一个耗时操作，但每个视频只执行一次
-        print(f"正在从视频 '{video_path.name}' 提取完整的RGB信号...")
+        # --- Step 1: Extract the full RGB signal from the entire video at once ---
+        # This is a time-consuming operation, but only performed once per video
+        print(f"Extracting full RGB signal from video '{video_path.name}'...")
         try:
-            # full_rgb_signal 的形状是 (num_frames, 1, 3)
+            # full_rgb_signal shape is (num_frames, 1, 3)
             full_rgb_signal = self.signal_processor.extract_holistic(str(video_path))
-            # 移除中间多余的维度 -> (num_frames, 3), 
-            # 因为extract_holistic情况下, 选择器数量永远都是1,所以其返回值的
-            # [num_frames, 1, rgb_channels]中, 1是多余的.
-            full_rgb_signal = np.squeeze(full_rgb_signal, axis=1) #squeeze第二个数
+            # Remove the redundant middle dimension -> (num_frames, 3)
+            # In extract_holistic mode, the selector count is always 1, so the
+            # returned shape [num_frames, 1, rgb_channels] has a redundant dim at axis=1
+            full_rgb_signal = np.squeeze(full_rgb_signal, axis=1)
         except Exception as e:
-            print(f"!! 在处理视频 '{video_path.name}' 时提取RGB信号失败: {e}")
+            print(f"!! Failed to extract RGB signal from video '{video_path.name}': {e}")
             return
         
-        print(f"RGB信号提取完成, 形状为: {full_rgb_signal.shape}")
+        print(f"RGB signal extraction complete, shape: {full_rgb_signal.shape}")
 
-        # --- 步骤 2: 应用滑动窗口并转换信号 ---
+        # --- Step 2: Apply sliding window and convert signals ---
         window_frames = int(self.window_length_sec * fps)
-        # 注意：步长是基于非重叠部分计算的
+        # Note: step is calculated based on the non-overlapping portion
         step_frames = int(self.step_length_sec * fps)
 
         all_windows_data = []
         
-        print("开始应用滑动窗口并转换为 BVP 信号...")
+        print("Applying sliding window and converting to BVP signal...")
         for window_id, start_frame in enumerate(range(0, total_frames, step_frames)):
             end_frame = start_frame + window_frames
-            # 如果窗口超出视频总长度，则忽略这个窗口
+            # If window exceeds video length, skip this window
             if end_frame > total_frames:
                 continue
 
-            # 2.1 切分窗口
+            # 2.1 Slice the window
             rgb_window = full_rgb_signal[start_frame:end_frame, :]
 
-            # 2.2 调整信号形状以匹配 cpu_OMIT 的输入要求
-            # cpu_OMIT 需要 [num_estimators, rgb_channels, num_frames]
-            # 当前是 [num_frames, rgb_channels] -> (window_frames, 3)
-            # 转置 -> (3, window_frames)
-            # 增加维度 -> (1, 3, window_frames)
+            # 2.2 Reshape signal to match cpu_OMIT input requirements
+            # cpu_OMIT expects [num_estimators, rgb_channels, num_frames]
+            # Current shape: [num_frames, rgb_channels] -> (window_frames, 3)
+            # Transpose -> (3, window_frames)
+            # Add dimension -> (1, 3, window_frames)
             rgb_window_transposed = rgb_window.T
             rgb_window_final = np.expand_dims(rgb_window_transposed, axis=0)
 
-            # 2.3 调用 OMIT 进行转换
-            # bvp_window 的形状是 (1, window_frames)
+            # 2.3 Call OMIT for conversion
+            # bvp_window shape is (1, window_frames)
             bvp_window = cpu_OMIT(rgb_window_final)
-            # 展平为一维数组
+            # Flatten to 1D array
             bvp_signal_list = bvp_window.flatten().tolist()
 
-            # 2.4 收集数据
+            # 2.4 Collect data
             window_data = {
                 'video_name': video_path.name,
                 'window_id': window_id,
@@ -208,11 +208,11 @@ class RppgExtractor:
             }
             all_windows_data.append(window_data)
         
-        # --- 步骤 3: 保存到 JSON 文件 ---
+        # --- Step 3: Save to JSON file ---
         with open(json_file_path, 'w') as f:
             json.dump(all_windows_data, f, indent=4)
             
-        print(f"rPPG信号已成功保存到: {json_file_path}")
+        print(f"rPPG signal successfully saved to: {json_file_path}")
 
 
 def process_dataset():
@@ -241,11 +241,11 @@ def process_dataset():
         print(f"Error: Dataset root path does not exist: {DATASET_ROOT_PATH}")
         return
 
-    print("正在根据 UBFC-Phys 结构查找视频文件...")
+    print("Searching for video files based on UBFC-Phys structure...")
     all_video_paths = []
     levels = ['T1', 'T2', 'T3']
     
-    # 获取所有 subject 目录 (s1, s2, ...) 并进行自然排序
+    # Get all subject directories (s1, s2, ...) and sort them naturally
     subject_dirs = sorted(
         [d for d in DATASET_ROOT_PATH.iterdir() if d.is_dir() and d.name.startswith('s')],
         key=lambda p: int(p.name[1:])
@@ -258,30 +258,30 @@ def process_dataset():
             if video_path.is_file():
                 all_video_paths.append(video_path)
             else:
-                print(f"警告: 视频文件不存在，已跳过: {video_path}")
+                print(f"Warning: Video file does not exist, skipping: {video_path}")
     
     if not all_video_paths:
-        print(f"在 '{DATASET_ROOT_PATH}' 中没有根据指定规则找到任何视频文件。")
+        print(f"No video files found in '{DATASET_ROOT_PATH}' matching the expected pattern.")
         return
 
-    # --- 3. 执行提取 ---
+    # --- 3. Execute extraction ---
     extractor = RppgExtractor(
         window_length_sec=WINDOW_LENGTH_SEC,
         step_length_sec=STEP_LENGTH_SEC,
         device=DEVICE
     )
 
-    print(f"共找到 {len(all_video_paths)} 个视频文件。开始处理...")
-    for video_path in tqdm.tqdm(all_video_paths, desc="整体进度"):
-        # 输出目录将位于每个 subject 文件夹内，名为 'rppg_signals'
+    print(f"Found {len(all_video_paths)} video files. Starting processing...")
+    for video_path in tqdm.tqdm(all_video_paths, desc="Overall Progress"):
+        # Output directory will be inside each subject folder, named 'rppg_signals'
         # e.g., /.../s1/rppg_signals/
         subject_dir = video_path.parent
         output_dir = subject_dir / "rppg_signals"
         
-        print(f"\n正在处理: {video_path}")
+        print(f"\nProcessing: {video_path}")
         extractor.extract_and_save_signals_from_video(video_path, output_dir)
 
-    print("\n--- 所有视频处理完成 ---")
+    print("\n--- All videos processed ---")
 
 
 if __name__ == '__main__':

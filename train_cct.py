@@ -23,10 +23,10 @@ from preprocessing.file_path_gen import FilePathGen
 
 def set_seed(seed: int):
     """
-    设置随机种子以确保实验的可复现性。
+    Set random seed for experiment reproducibility.
 
     Args:
-        seed (int): 随机种子。
+        seed (int): Random seed value.
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -88,57 +88,57 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module,
                     optimizer: torch.optim.Optimizer, device: torch.device,
                     use_mixup: bool = False, mixup_alpha: float = 0.4) -> Dict[str, float]:
     """
-    对模型进行一个 epoch 的训练。
+    Train the model for one epoch.
 
     Args:
-        model (nn.Module): 待训练的模型。
-        loader (DataLoader): 训练数据的 DataLoader。
-        criterion (nn.Module): 损失函数。
-        optimizer (torch.optim.Optimizer): 优化器。
-        device (torch.device): 计算设备 (cuda/cpu)。
-        use_mixup (bool): 是否启用 Mixup。
-        mixup_alpha (float): Mixup 的 Beta 分布参数。
+        model (nn.Module): The model to train.
+        loader (DataLoader): DataLoader for training data.
+        criterion (nn.Module): Loss function.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        device (torch.device): Compute device (cuda/cpu).
+        use_mixup (bool): Whether to enable Mixup.
+        mixup_alpha (float): Beta distribution parameter for Mixup.
 
     Returns:
-        Dict[str, float]: 包含平均训练损失、准确率和 F1 分数的字典。
+        Dict[str, float]: Dictionary containing average training loss, accuracy and F1 score.
     """
-    model.train()  # 将模型设置为训练模式
+    model.train()  # Set model to training mode
 
-    # TODO: 初始化用于累计损失和评估指标的变量
+    # Initialize variables for accumulating loss and evaluation metrics
     total_loss = 0.0
     all_preds, all_labels = [], []
 
     for images, labels in loader:
-        # TODO: 将数据移动到指定设备
+        # Move data to the specified device
         images = images.to(device)
         labels = labels.to(device, dtype=torch.long)
 
-        # --- 学习四步曲 ---
-        # 1. 梯度清零
+        # --- Training loop: four steps ---
+        # 1. Zero gradients
         optimizer.zero_grad(set_to_none=True)
-        # 2. 前向传播 (+ Mixup)
+        # 2. Forward pass (+ Mixup)
         if use_mixup:
             images, targets_a, targets_b, lam = mixup_data(images, labels, alpha=mixup_alpha, device=device)
             predictions = model(images)
-            # 3. 计算损失 (Mixup)
+            # 3. Compute loss (Mixup)
             loss = mixup_criterion(criterion, predictions, targets_a, targets_b, lam)
             current_labels = targets_a if lam >= 0.5 else targets_b
         else:
             predictions = model(images)
-            # 3. 计算损失
+            # 3. Compute loss
             loss = criterion(predictions, labels)
             current_labels = labels
-        # 4. 反向传播与权重更新
+        # 4. Backward pass and weight update
         loss.backward()
         optimizer.step()
 
-        # TODO: 累计损失和预测结果/真实标签，用于后续指标计算
+        # Accumulate loss and predictions/labels for metric computation
         total_loss += loss.item()
         preds = torch.argmax(predictions, dim=1)
         all_preds.extend(preds.detach().cpu().numpy())
         all_labels.extend(current_labels.detach().cpu().numpy())
 
-    # TODO: 计算整个 epoch 的平均损失和各项指标 (accuracy, f1-score)
+    # Compute average loss and metrics for the entire epoch
     avg_loss = total_loss / len(loader)
     accuracy = accuracy_score(all_labels, all_preds, normalize=True)
     f1 = f1_score(all_labels, all_preds, average='macro')
@@ -149,43 +149,43 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, criterion: nn.Module,
 def validate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
              device: torch.device) -> Dict[str, float]:
     """
-    在验证集上评估模型性能。
+    Evaluate model performance on the validation set.
 
     Args:
-        model (nn.Module): 待评估的模型。
-        loader (DataLoader): 验证数据的 DataLoader。
-        criterion (nn.Module): 损失函数。
-        device (torch.device): 计算设备 (cuda/cpu)。
+        model (nn.Module): The model to evaluate.
+        loader (DataLoader): DataLoader for validation data.
+        criterion (nn.Module): Loss function.
+        device (torch.device): Compute device (cuda/cpu).
 
     Returns:
-        Dict[str, float]: 包含平均验证损失、准确率和 F1 分数的字典。
+        Dict[str, float]: Dictionary containing average validation loss, accuracy and F1 score.
     """
-    model.eval()  # 将模型设置为评估模式
+    model.eval()  # Set model to evaluation mode
 
-    # TODO: 初始化用于累计损失和评估指标的变量
+    # Initialize variables for accumulating loss and evaluation metrics
     total_loss = 0.0
     all_preds, all_labels = [], []
 
-    # 在 no_grad 环境下进行，以节省计算资源
+    # Run under no_grad to save computation resources
     with torch.no_grad():
         for images, labels in loader:
-            # TODO: 将数据移动到指定设备
+            # Move data to the specified device
             images = images.to(device)
             labels = labels.to(device, dtype=torch.long)
 
-            # TODO: 前向传播
+            # Forward pass
             predictions = model(images)
 
-            # TODO: 计算损失
+            # Compute loss
             loss = criterion(predictions, labels)
 
-            # TODO: 累计损失和预测结果/真实标签
+            # Accumulate loss and predictions/labels
             total_loss += loss.item()
             preds = torch.argmax(predictions, dim=1)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
 
-    # TODO: 计算整个验证集的平均损失和各项指标
+    # Compute average loss and metrics for the entire validation set
     avg_loss = total_loss / len(loader)
     accuracy = accuracy_score(all_labels, all_preds, normalize=True)
     f1 = f1_score(all_labels, all_preds, average='macro')
@@ -195,12 +195,12 @@ def validate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
 
 def main(args: argparse.Namespace):
     """
-    主执行函数，负责组织整个交叉验证、训练和验证流程。
+    Main execution function that orchestrates cross-validation, training and validation.
 
     Args:
-        args (argparse.Namespace): 从命令行解析的参数。
+        args (argparse.Namespace): Command-line arguments.
     """
-    # 1. 设置与初始化（支持随机种子并打印）
+    # 1. Setup and initialization (support random seed and print it)
     def _init_and_set_seed(seed_arg: int) -> int:
         if seed_arg is None or seed_arg < 0:
             seed = random.randint(0, 2**31 - 1)
@@ -218,7 +218,7 @@ def main(args: argparse.Namespace):
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Weights will be saved to: {output_dir}")
 
-    # 可选：初始化 Weights & Biases 进行实验跟踪
+    # Optional: Initialize Weights & Biases for experiment tracking
     wandb_run = None
     if getattr(args, "use_wandb", False):
         wandb_config = vars(args).copy()
@@ -254,19 +254,19 @@ def main(args: argparse.Namespace):
 
     kf = KFold(n_splits=7, shuffle=True, random_state=used_seed)
 
-    # TODO: 初始化一个列表，用于存储每个 fold 的最佳结果，以便最后计算平均值
-    # 然而, 我并不确定论文原文的内容是否是这么实现的, 需要检查笔记确认一下
+    # Initialize a list to store best results per fold for final averaging
+    # Note: Verify against original paper implementation if needed
     all_folds_best_metrics = []
     best_epochs: List[int] = []
     best_overfit_gaps: List[float] = []
 
-    # 3. 交叉验证主循环
+    # 3. Cross-validation main loop
     for fold_idx, (train_indices, val_indices) in enumerate(kf.split(all_subjects)):
         print("\n" + "=" * 50)
         print(f"Cross-Validation Fold {fold_idx + 1}/7")
         print("=" * 50)
 
-        # a. 划分当前 fold 的训练集和验证集
+        # a. Split train and validation sets for current fold
         train_subjects = [all_subjects[i] for i in train_indices]
         validation_subjects = [all_subjects[i] for i in val_indices]
         print(f"Training on {len(train_subjects)} subjects.")
@@ -274,12 +274,12 @@ def main(args: argparse.Namespace):
         if args.early_stop_patience > 0:
             print(f"Early stopping enabled with patience={args.early_stop_patience} (monitor=val_f1)")
 
-        # b. 创建数据集和 DataLoader
-        # TODO: 使用 train_subjects 和 validation_subjects 分别实例化 SingleImageDataset
-        # 验证集保持干净
+        # b. Create datasets and DataLoaders
+        # Instantiate SingleImageDataset for train_subjects and validation_subjects
+        # Validation set keeps clean transforms
         val_transform = get_default_transforms()
 
-        # 训练集：Resize -> ToTensor -> (Noise) -> (Cutout) -> Normalize
+        # Training set: Resize -> ToTensor -> (Noise) -> (Cutout) -> Normalize
         train_tf_list = [
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
@@ -306,7 +306,7 @@ def main(args: argparse.Namespace):
             transform=val_transform
         )
 
-        # TODO: 创建 DataLoader
+        # Create DataLoaders
         train_dataLoader = DataLoader(
             train_dataset,
             batch_size=args.batch_size,
@@ -323,20 +323,20 @@ def main(args: argparse.Namespace):
             pin_memory=device.type == 'cuda',
             persistent_workers=(args.num_workers > 0))
 
-        # c. 为当前 fold 创建全新的模型、优化器和损失函数
-        # TODO: 实例化模型并移动到 device
+        # c. Create fresh model, optimizer and loss function for current fold
+        # Instantiate model and move to device
         model = CCTForPreTraining(
             num_classes=3,
             dropout=args.dropout,
             emb_dropout=args.emb_dropout
         ).to(device)
-        # TODO: 实例化优化器和损失函数
+        # Instantiate optimizer and loss function
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
         criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-        # d. 训练与验证循环
-        # TODO: 初始化用于追踪当前 fold 最佳性能的变量
+        # d. Training and validation loop
+        # Initialize variables for tracking best performance in current fold
         best_val_f1 = 0.0
         epochs_no_improve = 0
         best_epoch_for_fold = None
@@ -365,7 +365,7 @@ def main(args: argparse.Namespace):
                 f"time={dur:.2f}s ETA~{remain/60:.1f}m"
             )
 
-            # 将当前 epoch 的指标发送到 wandb
+            # Send current epoch metrics to wandb
             if wandb_run is not None:
                 wandb.log(
                     {
@@ -382,7 +382,7 @@ def main(args: argparse.Namespace):
                     }
                 )
 
-            # e. 检查并保存最佳模型
+            # e. Check and save best model
             current_f1 = val_metrics['val_f1']
             if current_f1 > best_val_f1 + 1e-6:
                 best_val_f1 = current_f1
@@ -394,7 +394,7 @@ def main(args: argparse.Namespace):
                 best_epoch_for_fold = epoch + 1
                 best_overfit_gap_for_fold = train_metrics["train_acc"] - val_metrics["val_acc"]
 
-                # 在 wandb summary 中记录当前 fold 的最好 F1
+                # Record best F1 for current fold in wandb summary
                 if wandb_run is not None:
                     wandb.run.summary[f"best_val_f1_fold_{fold_idx + 1}"] = best_val_f1
                     wandb.run.summary[f"best_epoch_fold_{fold_idx + 1}"] = best_epoch_for_fold
@@ -402,13 +402,13 @@ def main(args: argparse.Namespace):
             else:
                 epochs_no_improve += 1
 
-            # f. 提前停止判断
+            # f. Early stopping check
             if args.early_stop_patience > 0 and epochs_no_improve >= args.early_stop_patience:
                 print(f"[Fold {fold_idx + 1}] Early stopping at epoch {epoch + 1} "
                       f"(no val_f1 improvement for {epochs_no_improve} epochs)")
                 break
 
-        # TODO: 记录当前 fold 的最佳 F1 分数
+        # Record the best F1 score for current fold
         all_folds_best_metrics.append({'fold': fold_idx + 1, 'best_f1': best_val_f1})
         if best_epoch_for_fold is not None:
             best_epochs.append(best_epoch_for_fold)
@@ -416,8 +416,8 @@ def main(args: argparse.Namespace):
             best_overfit_gaps.append(best_overfit_gap_for_fold)
         print(f"\nBest F1 score for fold {fold_idx + 1}: {best_val_f1:.4f}")
 
-    # 4. 总结并打印所有 fold 的平均性能
-    # TODO: 计算并打印交叉验证的平均 F1 分数
+    # 4. Summarize and print average performance across all folds
+    # Compute and print average F1 score from cross-validation
     avg_f1 = np.mean([m["best_f1"] for m in all_folds_best_metrics])
     avg_best_epoch = float(np.mean(best_epochs)) if best_epochs else None
     avg_overfit_gap = float(np.mean(best_overfit_gaps)) if best_overfit_gaps else None
@@ -430,7 +430,7 @@ def main(args: argparse.Namespace):
         print(f"Average overfit gap (train_acc - val_acc): {avg_overfit_gap:.4f}")
     print("=" * 50)
 
-    # 在 wandb summary 中记录整体 7-fold 平均
+    # Record overall 7-fold average in wandb summary
     if wandb_run is not None:
         wandb.run.summary["avg_val_f1_7fold"] = float(avg_f1)
         if avg_best_epoch is not None:
@@ -441,10 +441,10 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == '__main__':
-    # 配置命令行参数
+    # Configure command-line arguments
     parser = argparse.ArgumentParser(description="Stage 1: CCT Pre-training Script")
 
-    # 核心参数
+    # Core parameters
     parser.add_argument('--modality', type=str, required=True, choices=['landmark', 'rppg'],
                         help="The modality to train on ('landmark' or 'rppg').")
     parser.add_argument('--data-root', type=str, default=None,
@@ -453,7 +453,7 @@ if __name__ == '__main__':
     parser.add_argument('--output-dir', type=str, default='weights',
                         help="Directory to save the best model weights.")
 
-    # 训练超参数
+    # Training hyperparameters
     parser.add_argument('--epochs', type=int, default=100,
                         help="Number of training epochs.")
     parser.add_argument('--batch-size', type=int, default=16,
@@ -462,20 +462,20 @@ if __name__ == '__main__':
                         help="Learning rate for the optimizer. Default is 1e-4.")
     parser.add_argument('--wd', type=float, default=1e-4,
                         help="Weight decay for the optimizer. Default is 1e-4.")
-    # 环境与复现性参数
+    # Environment and reproducibility parameters
     parser.add_argument('--seed', type=int, default=-1,
                         help="Random seed. <0 to sample a new random seed per run and print it.")
     parser.add_argument('--device', type=str, default='cuda',
                         help="Device to use for training ('cuda' or 'cpu').")
     parser.add_argument('--num_workers', type=int, default=4, help='Number of DataLoader workers')
     parser.add_argument('--early-stop-patience', type=int, default=30,
-                        help='Early stopping patience on val_f1; 0 表示关闭（默认 30）')
-    # CCT 正则参数
+                        help='Early stopping patience on val_f1; 0 to disable (default: 30)')
+    # CCT regularization parameters
     parser.add_argument('--dropout', type=float, default=0.1,
                         help='CCT dropout rate (default: 0.1)')
     parser.add_argument('--emb-dropout', type=float, default=0.1,
                         help='CCT embedding dropout rate (default: 0.1)')
-    # 训练数据增强（默认关闭）
+    # Training data augmentation (disabled by default)
     parser.add_argument('--use-mixup', action='store_true',
                         help='Enable Mixup for training (default: False).')
     parser.add_argument('--mixup-alpha', type=float, default=0.2,
@@ -491,7 +491,7 @@ if __name__ == '__main__':
     parser.add_argument('--noise-std', type=float, default=0.03,
                         help='Std of Gaussian noise added after ToTensor and before Normalize (default: 0.03).')
 
-    # Weights & Biases 实验追踪
+    # Weights & Biases experiment tracking
     parser.add_argument('--use-wandb', action='store_true',
                         help='Enable logging to Weights & Biases (default: True).')
     parser.add_argument('--wandb-project', type=str, default='cct_pretraining',

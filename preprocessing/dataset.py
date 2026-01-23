@@ -129,8 +129,8 @@ class VideoSequenceDataset(Dataset):
 
                 # The file existence is checked here during initialization.
                 if not landmark_dir.is_dir() or not rppg_dir.is_dir():
-                    # TODO(multilevel-labels): 未来在做多等级压力分类（T1, T3-ctrl, T3-test）时，
-                    # 这里需要结合 master_manifest.csv 中的 group(ctrl/test) 信息进行筛选。
+                    # TODO(multilevel-labels): For multi-level stress classification (T1, T3-ctrl, T3-test),
+                    # filtering based on group(ctrl/test) from master_manifest.csv will be needed here.
                     print(
                         f"Warning: Missing modality directories for subject '{subject_id}'. "
                         f"landmark_dir_exists={landmark_dir.is_dir()}, rppg_dir_exists={rppg_dir.is_dir()}. Skipping."
@@ -143,7 +143,7 @@ class VideoSequenceDataset(Dataset):
                 if not landmark_paths and not rppg_paths:
                     continue
 
-                # 解析 window_id -> 路径
+                # Parse window_id from path
                 def _parse_window_id(path: Path) -> int:
                     try:
                         return int(path.stem.split('_')[-1])

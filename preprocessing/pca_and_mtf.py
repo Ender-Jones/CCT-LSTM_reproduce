@@ -103,7 +103,7 @@ class PcaAndMtfProcessor:
     def _zscore_normalize(self, x: np.ndarray):
         """
         Z-score normalize before applying MTF.
-        z = (x - mu) / sigma，其中 mu/sigma 为当前窗口的均值/标准差。
+        z = (x - mu) / sigma, where mu/sigma are the mean/std of the current window.
         Args:
             np.ndarray: The numpy array to normalize.
         Returns:
@@ -146,7 +146,7 @@ class PcaAndMtfProcessor:
         mtf_x = self._process_single_coordinate(coords_x)
         mtf_y = self._process_single_coordinate(coords_y)
         mtf_z = self._process_single_coordinate(coords_z)
-        # 任一通道不稳定则返回 None，调用方跳过该窗口
+        # If any channel is unstable, return None so caller can skip this window
         if mtf_x is None or mtf_y is None or mtf_z is None:
             return None
 
@@ -205,21 +205,21 @@ class PcaAndMtfProcessor:
 
     def _process_rppg_to_mtf(self, rppgs, max_len: int = None):
         """
-        将一段 rPPG/BVP 一维序列转换为 RGB MTF 图像。
-        说明：下采样暂时关闭；若需开启，将 max_len 设为正整数并取消下方注释。
+        Convert a 1D rPPG/BVP signal into an RGB MTF image.
+        Note: Downsampling is currently disabled; to enable, set max_len to a positive int and uncomment below.
         """
         x = np.asarray(rppgs, dtype=np.float32)
-        # 下采样暂时关闭
+        # Downsampling is currently disabled
         # if max_len is not None and len(x) > max_len:
         #     idx = np.linspace(0, len(x) - 1, max_len).astype(int)
         #     x = x[idx]
         x = self._zscore_normalize(x)
         if x is None:
             return None
-        # 使用当前的 MTF 配置（quantile + n_bins）
+        # Use current MTF configuration (quantile + n_bins)
         img = self.mtf.fit_transform(x[None, :])[0]  # (n, n)
         img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        # 与 landmark 流保持一致：尺寸在 Dataset 中再统一 resize
+        # Consistent with landmark pipeline: resizing is done in Dataset
         return np.stack([img, img, img], axis=-1)
 
     def process_rppg_to_mtf(self, current_rppg_path):
@@ -238,7 +238,7 @@ class PcaAndMtfProcessor:
         output_dir = current_rppg_path.parent.parent / 'mtf_images' / 'rppg'
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 从路径解析 subject 与 level
+        # Parse subject and level from path
         subject = current_rppg_path.parent.parent.name  # 'sXX'
         level = current_rppg_path.stem.split('_')[2]  # 'T1'|'T2'|'T3'
 
@@ -273,5 +273,5 @@ class PcaAndMtfProcessor:
                 continue
             cv2.imwrite(str(output_image_path), cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR))
 
-        # 批处理函数不返回图像
+        # Batch processing function does not return images
         return None
