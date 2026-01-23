@@ -1,3 +1,11 @@
+# Paper PDF (download from official source via DOI)
+*.pdf
+
+# Generated visualization outputs
+/scripts/dataset_visualization/eda_results/
+/scripts/dataset_visualization/data_mining/
+
+# Project-specific ignores
 UBFC_data_path.txt
 output.log
 weights/

@@ -22,3 +22,10 @@ dependencies:
     - tqdm==4.67.1
     - pyts==0.13.0
     - vit-pytorch==1.7.7
+    # Experiment tracking (optional, used by training scripts)
+    - wandb
+    # EDA visualization scripts dependencies
+    - neurokit2
+    - seaborn
+    - plotly
+    - scipy
