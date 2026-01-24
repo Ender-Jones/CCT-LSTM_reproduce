@@ -42,6 +42,7 @@ OUT_STRIP_PHASIC = "strip_task_vs_phasic_var.jpg"
 OUT_STRIP_SDNN = "strip_task_vs_hrv_sdnn.jpg"
 OUT_STRIP_RMSSD = "strip_task_vs_hrv_rmssd.jpg"
 OUT_BOX_PHASIC_STD = "box_task_vs_phasic_std.jpg"
+OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 
 
@@ -635,6 +636,86 @@ def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
         print(f"[INFO] Saved {output_path}")
 
 
+def plot_box_interaction_feature(merged_df: pd.DataFrame) -> None:
+    """Plot box plot of Tonic Slope * Phasic Std interaction feature.
+
+    Calculates a new feature (tonic_slope * phasic_std) representing the
+    interaction between stress trend and reactivity volatility.
+
+    Args:
+        merged_df: DataFrame from merge_eda_and_ppg_features().
+
+    Returns:
+        None.
+
+    Outputs:
+        Saves to DATA_MINING_OUTPUT_DIR:
+            - box_interaction_slope_phasic.jpg
+    """
+    required_cols = ['tonic_slope', 'phasic_std', 'task_label']
+    if merged_df.empty or not all(col in merged_df.columns for col in required_cols):
+        print("[WARN] Missing columns for interaction plot. Skipping.")
+        return
+
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Calculate the interaction feature
+    # Feature = Trend (Slope) * Volatility (Std)
+    merged_df = merged_df.copy()
+    merged_df['interaction_feature'] = merged_df['tonic_slope'] * merged_df['phasic_std']
+
+    # 5-class color palette
+    task_palette = {
+        'T1':      '#4CAF50',  # green
+        'T2-ctrl': '#90CAF9',  # light blue
+        'T2-test': '#1565C0',  # dark blue
+        'T3-ctrl': '#EF9A9A',  # light red
+        'T3-test': '#C62828',  # dark red
+    }
+
+    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Box plot
+    sns.boxplot(
+        data=merged_df,
+        x='task_label',
+        y='interaction_feature',
+        palette=task_palette,
+        order=hue_order,
+        showfliers=False,
+        ax=ax
+    )
+
+    # Strip plot overlay
+    sns.stripplot(
+        data=merged_df,
+        x='task_label',
+        y='interaction_feature',
+        color='black',
+        order=hue_order,
+        size=4,
+        alpha=0.3,
+        jitter=True,
+        ax=ax
+    )
+
+    # Add a horizontal line at 0 to distinguish increasing vs decreasing trend interactions
+    ax.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    ax.set_xlabel('Task-Group', fontsize=12)
+    ax.set_ylabel('Tonic Slope x Phasic Std', fontsize=12)
+    ax.set_title('Tonic Slope x Phasic Std', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_INTERACTION
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {output_path}")
+
+
 def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
     """Plot interactive 3D scatter plot of EDA features using Plotly.
 
@@ -785,6 +866,9 @@ if __name__ == "__main__":
 
     # Step 5b: Plot phasic standard deviation distribution by task (New Request)
     plot_box_phasic_std_by_task(merged_df)
+
+    # Step 5c: Plot interaction feature (Tonic Slope * Phasic Std) - Professor Request
+    plot_box_interaction_feature(merged_df)
 
     # Step 6: Plot interactive 3D EDA feature space (Plotly)
     plot_3d_eda_feature_space(merged_df)
