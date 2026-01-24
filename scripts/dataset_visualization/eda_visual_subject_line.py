@@ -4,6 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import neurokit2 as nk
 import pandas as pd
+import numpy as np
 
 import data_mining_common as dmc
 
@@ -118,9 +119,10 @@ def save_graph(fig, subject_id: str) -> Path:
     return output_path
 
 
-def visualize_subject_combined(subject_path: Path) -> Path | None:
+def process_subject_data(subject_path: Path) -> tuple[pd.DataFrame, list[int]] | None:
     """
-    Make a plot for each subject with all the tasks combined (T1+T2+T3).
+    Process EDA data for a single subject.
+    Returns the combined signals DataFrame and the list of task lengths.
     """
     eda_paths = dmc.list_eda_paths(subject_path)
     if not dmc.has_expected_eda_files(eda_paths, subject_path):
@@ -131,12 +133,24 @@ def visualize_subject_combined(subject_path: Path) -> Path | None:
 
     for eda_path in eda_paths:
         eda_data = dmc.read_eda_data(eda_path)
-        processed_eda_signal, info = nk.eda_process(eda_data, sampling_rate=dmc.EDA_SAMPLING_RATE_HZ)
+        processed_eda_signal, info = nk.eda_process(
+            eda_data, sampling_rate=dmc.EDA_SAMPLING_RATE_HZ)
         signal_list.append(processed_eda_signal)
         length_list.append(len(processed_eda_signal))
 
     # combine the signals into a single dataframe
     all_signals = pd.concat(signal_list, axis=0, ignore_index=True)
+    return all_signals, length_list
+
+
+def visualize_subject_combined(subject_path: Path) -> Path | None:
+    """
+    Make a plot for each subject with all the tasks combined (T1+T2+T3).
+    """
+    result = process_subject_data(subject_path)
+    if result is None:
+        return None
+    all_signals, length_list = result
 
     # calculate boundary of the signals
     task1_task2_div_sec, task2_task3_div_sec = calculate_graph_task_boundary(
@@ -160,13 +174,92 @@ def visualize_subject_combined(subject_path: Path) -> Path | None:
     return save_graph(fig, subject_id)
 
 
+def visualize_group_combined(subject_paths: list[Path], group_name: str) -> Path | None:
+    """
+    Make a combined plot for a group of subjects.
+    """
+    group_data = []
+    for subject_path in subject_paths:
+        result = process_subject_data(subject_path)
+        if result:
+            all_signals, length_list = result
+            group_data.append((subject_path.name, all_signals))
+
+    if not group_data:
+        return None
+
+    # create the plot
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(18, 12), sharex=True)
+
+    # Generate colors
+    num_subjects = len(group_data)
+    if num_subjects <= 20:
+        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
+    else:
+        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
+
+    for i, (subject_id, all_signals) in enumerate(group_data):
+        time_axis = all_signals.index / dmc.EDA_SAMPLING_RATE_HZ
+        color = colors[i]
+
+        # Row 1: Cleaned
+        ax1.plot(
+            time_axis,
+            all_signals["EDA_Clean"],
+            color=color,
+            label=subject_id,
+            linewidth=1.2,
+            alpha=0.7,
+        )
+
+        # Row 2: SCR (Phasic)
+        ax2.plot(
+            time_axis,
+            all_signals["EDA_Phasic"],
+            color=color,
+            label=subject_id,
+            linewidth=1,
+            alpha=0.7,
+        )
+
+        # Row 3: SCL (Tonic)
+        ax3.plot(
+            time_axis,
+            all_signals["EDA_Tonic"],
+            color=color,
+            label=subject_id,
+            linewidth=1.5,
+            alpha=0.7,
+        )
+
+    # Set titles and labels
+    ax1.set_title(f"Cleaned EDA Signal - {group_name}", fontsize=14, fontweight='bold')
+    ax1.set_ylabel("Conductance (µS)")
+
+    ax2.set_title(f"Skin Conductance Response (Phasic) - {group_name}",
+                  fontsize=14, fontweight='bold')
+    ax2.set_ylabel("Amplitude (µS)")
+    ax2.axhline(y=0, color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+
+    ax3.set_title(f"Skin Conductance Level (Tonic) - {group_name}",
+                  fontsize=14, fontweight='bold')
+    ax3.set_ylabel("Conductance (µS)")
+    ax3.set_xlabel("Time (seconds)")
+
+    # Legend (only if reasonable number)
+    if num_subjects <= 20:
+        ax1.legend(loc='upper right', ncol=2, fontsize='small')
+
+    return save_graph(fig, group_name)
+
+
 if __name__ == "__main__":
     warnings.filterwarnings(
         "ignore", message="EDA signal is sampled at very low frequency"
     )
 
     # Read (or ask for) dataset path.
-    dataset_path = dmc.read_pathfile_or_ask_for_path
+    dataset_path = dmc.read_pathfile_or_ask_for_path()
 
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset path does not exist: {dataset_path}")
@@ -175,5 +268,27 @@ if __name__ == "__main__":
     if not subject_paths:
         raise ValueError(f"No subject directories found under: {dataset_path}")
 
+    # 1. Original per-subject visualization
+    print("Generating per-subject plots...")
     for subject_path in subject_paths:
         visualize_subject_combined(subject_path)
+
+    # 2. Group by 8
+    print("Generating 8-subject group plots...")
+    chunk_size_8 = 8
+    for i in range(0, len(subject_paths), chunk_size_8):
+        group = subject_paths[i:i + chunk_size_8]
+        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
+        visualize_group_combined(group, group_name)
+
+    # 3. Group by 14
+    print("Generating 14-subject group plots...")
+    chunk_size_14 = 14
+    for i in range(0, len(subject_paths), chunk_size_14):
+        group = subject_paths[i:i + chunk_size_14]
+        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
+        visualize_group_combined(group, group_name)
+
+    # 4. All subjects
+    print("Generating all-subjects plot...")
+    visualize_group_combined(subject_paths, "All_Subjects")
