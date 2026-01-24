@@ -855,6 +855,49 @@ def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 
     return time_points, np.array(rmssd_values)
 
 
+def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Calculate concatenated rolling RMSSD for a subject across T1-T3.
+
+    Returns:
+        Tuple of (full_time, full_rmssd, task_boundaries).
+    """
+    bvp_paths = dmc.list_bvp_paths(subject_path)
+    if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+        return np.array([]), np.array([]), []
+
+    all_times = []
+    all_rmssd = []
+    boundaries = []
+    current_offset = 0
+
+    # Process T1, T2, T3 in order
+    for bvp_path in bvp_paths:
+        bvp_data = dmc.read_bvp_data(bvp_path)
+        duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
+
+        # Calculate rolling RMSSD (30s window)
+        times, rmssd = calculate_rolling_rmssd(
+            bvp_data, dmc.BVP_SAMPLING_RATE_HZ, window_sec=30, step_sec=1
+        )
+
+        if len(times) == 0:
+            # Fallback for empty/failed processing
+            times = np.arange(0, duration, 1)
+            rmssd = np.full(len(times), np.nan)
+
+        # Shift times by current cumulative offset
+        all_times.append(times + current_offset)
+        all_rmssd.append(rmssd)
+
+        current_offset += duration
+        boundaries.append(current_offset)
+
+    full_time = np.concatenate(all_times)
+    full_rmssd = np.concatenate(all_rmssd)
+
+    return full_time, full_rmssd, boundaries
+
+
 def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
     """Generate per-subject plots of rolling RMSSD across T1-T3.
 
@@ -874,67 +917,26 @@ def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, st
     for subject_path in dmc.list_subject_paths(dataset_path):
         subject_id = subject_path.name
         group = subject_group_map.get(subject_id, 'unknown')
-        bvp_paths = dmc.list_bvp_paths(subject_path)
-
-        if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+        
+        full_time, full_rmssd, boundaries = get_subject_hrv_profile(subject_path)
+        if len(full_time) == 0:
             continue
-
-        # Store segments to concatenate
-        all_times = []
-        all_rmssd = []
-        boundaries = []
-        current_offset = 0
-
-        # Process T1, T2, T3 in order
-        for bvp_path in bvp_paths:
-            # task_id = bvp_path.stem.split('_')[-1]
-            bvp_data = dmc.read_bvp_data(bvp_path)
-            duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
-
-            # Calculate rolling RMSSD (30s window)
-            times, rmssd = calculate_rolling_rmssd(
-                bvp_data, dmc.BVP_SAMPLING_RATE_HZ, window_sec=30, step_sec=1
-            )
-
-            if len(times) == 0:
-                # Fallback for empty/failed processing: empty arrays with correct duration
-                times = np.arange(0, duration, 1)
-                rmssd = np.full(len(times), np.nan)
-
-            # Shift times by current cumulative offset
-            all_times.append(times + current_offset)
-            all_rmssd.append(rmssd)
-
-            current_offset += duration
-            boundaries.append(current_offset)
-
-        # Concatenate all tasks
-        full_time = np.concatenate(all_times)
-        full_rmssd = np.concatenate(all_rmssd)
 
         # Plot
         fig, ax = plt.subplots(figsize=(12, 6))
         
-        # Plot the RMSSD line
-        # Connect gaps with nan? matplotlib handles nan by breaking the line, which is correct
         ax.plot(full_time, full_rmssd, color='#E91E63', linewidth=2, label='RMSSD (30s window)')
 
         # Add vertical lines for task boundaries
-        # boundaries contains [end_T1, end_T1+end_T2, end_T1+end_T2+end_T3]
-        # We only need the first two for separation
         for b in boundaries[:-1]:
             ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
 
         # Add task labels centered in each segment
-        # Segments: [0, b0], [b0, b1], [b1, b2]
         segment_starts = [0] + boundaries[:-1]
         segment_ends = boundaries
         labels = ['T1', 'T2', 'T3']
         
         y_lims = ax.get_ylim()
-        # If all nan, y_lims might be (0.0, 1.0) or similar default
-        # We put labels at the top
-        
         for start, end, lbl in zip(segment_starts, segment_ends, labels):
             mid_point = (start + end) / 2
             ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
@@ -948,9 +950,58 @@ def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, st
         out_path = output_dir / f"hrv_profile_{subject_id}.jpg"
         fig.savefig(out_path, dpi=100, bbox_inches='tight')
         plt.close(fig)
-        # print(f"[INFO] Saved {out_path}")
 
     print(f"[INFO] Saved per-subject HRV profiles to {output_dir}")
+
+
+def plot_group_rolling_hrv(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
+    """Plot combined rolling RMSSD profiles for a group of subjects.
+    
+    Args:
+        subject_paths: List of subject paths to include in the plot.
+        group_name: Name of the group (used for filename and title).
+        subject_group_map: Mapping of {subject_id: group}.
+    """
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "group_hrv_profiles"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    # Use a colormap
+    num_subjects = len(subject_paths)
+    # Use tab20 if <= 20, else jet
+    if num_subjects <= 20:
+        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
+    else:
+        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
+
+    has_data = False
+    for i, subject_path in enumerate(subject_paths):
+        subject_id = subject_path.name
+        full_time, full_rmssd, _ = get_subject_hrv_profile(subject_path)
+        
+        if len(full_time) > 0:
+            has_data = True
+            ax.plot(full_time, full_rmssd, label=subject_id, color=colors[i], alpha=0.7, linewidth=1.5)
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel('Time (s)', fontsize=12)
+    ax.set_ylabel('HRV RMSSD (ms)', fontsize=12)
+    ax.set_title(f'Group HRV RMSSD Profile - {group_name}', fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    
+    # Legend only if not too many subjects
+    if num_subjects <= 20:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
+    
+    plt.tight_layout()
+    out_path = output_dir / f"hrv_profile_{group_name}.jpg"
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {out_path}")
 
 
 def cluster_features(merged_df: pd.DataFrame) -> pd.DataFrame:
@@ -1035,6 +1086,27 @@ if __name__ == "__main__":
     # Step 7b: Plot Subject HRV Profile (Rolling RMSSD)
     print("[INFO] Generating per-subject HRV profiles...")
     plot_subject_rolling_hrv(dataset_path, subject_group_map)
+
+    # Step 7c: Plot Group HRV Profiles (Batched)
+    print("[INFO] Generating group HRV profiles...")
+    subject_paths = dmc.list_subject_paths(dataset_path)
+    
+    # Batch of 8
+    chunk_size_8 = 8
+    for i in range(0, len(subject_paths), chunk_size_8):
+        group = subject_paths[i:i + chunk_size_8]
+        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
+        plot_group_rolling_hrv(group, group_name, subject_group_map)
+        
+    # Batch of 14
+    chunk_size_14 = 14
+    for i in range(0, len(subject_paths), chunk_size_14):
+        group = subject_paths[i:i + chunk_size_14]
+        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
+        plot_group_rolling_hrv(group, group_name, subject_group_map)
+
+    # All subjects
+    plot_group_rolling_hrv(subject_paths, "All_Subjects", subject_group_map)
 
     # --- Sprint #2 (Not implemented yet) ---
     # Step 8: Clustering analysis
