@@ -41,6 +41,7 @@ OUT_SCATTER_TONIC_VS_RMSSD = "scatter_tonic_mean_vs_hrv_rmssd.jpg"
 OUT_STRIP_PHASIC = "strip_task_vs_phasic_var.jpg"
 OUT_STRIP_SDNN = "strip_task_vs_hrv_sdnn.jpg"
 OUT_STRIP_RMSSD = "strip_task_vs_hrv_rmssd.jpg"
+OUT_BOX_PHASIC_STD = "box_task_vs_phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 
 
@@ -460,6 +461,78 @@ def plot_strip_phasic_by_task(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
+def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
+    """Plot box plot showing EDA phasic standard deviation distribution by task_label.
+
+    Creates a box plot with task_label on X-axis and phasic_std on Y-axis.
+    Includes individual data points as a strip plot overlay.
+
+    Args:
+        merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
+            'phasic_std' column.
+
+    Returns:
+        None.
+
+    Outputs:
+        Saves to DATA_MINING_OUTPUT_DIR:
+            - box_task_vs_phasic_std.jpg
+    """
+    if merged_df.empty or 'phasic_std' not in merged_df.columns:
+        print("[WARN] No phasic_std data available. Skipping box plot.")
+        return
+
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 5-class color palette
+    task_palette = {
+        'T1':      '#4CAF50',  # green - baseline
+        'T2-ctrl': '#90CAF9',  # light blue - easy task
+        'T2-test': '#1565C0',  # dark blue - hard task
+        'T3-ctrl': '#EF9A9A',  # light red - easy task
+        'T3-test': '#C62828',  # dark red - hard task
+    }
+
+    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    # Box plot for distribution statistics
+    sns.boxplot(
+        data=merged_df,
+        x='task_label',
+        y='phasic_std',
+        palette=task_palette,
+        order=hue_order,
+        showfliers=False,  # Hide outliers to avoid duplication with strip plot
+        ax=ax
+    )
+    
+    # Strip plot overlay for individual points
+    sns.stripplot(
+        data=merged_df,
+        x='task_label',
+        y='phasic_std',
+        color='black',
+        order=hue_order,
+        size=4,
+        alpha=0.3,
+        jitter=True,
+        ax=ax
+    )
+
+    ax.set_xlabel('Task-Group', fontsize=12)
+    ax.set_ylabel('EDA Phasic Standard Deviation (µS)', fontsize=12)
+    ax.set_title('EDA Phasic Std Distribution by Task', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_PHASIC_STD
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {output_path}")
+
+
 def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
     """Plot strip plots showing HRV metrics distribution by task_label.
 
@@ -709,6 +782,9 @@ if __name__ == "__main__":
 
     # Step 5: Plot phasic variance distribution by task
     plot_strip_phasic_by_task(merged_df)
+
+    # Step 5b: Plot phasic standard deviation distribution by task (New Request)
+    plot_box_phasic_std_by_task(merged_df)
 
     # Step 6: Plot interactive 3D EDA feature space (Plotly)
     plot_3d_eda_feature_space(merged_df)
