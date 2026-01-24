@@ -797,6 +797,162 @@ def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
+def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 30, step_sec: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate rolling RMSSD from BVP signal.
+
+    1. Cleans BVP signal and finds peaks.
+    2. Calculates RR intervals.
+    3. Computes RMSSD in sliding windows.
+
+    Args:
+        bvp_signal: Raw BVP signal data.
+        fs: Sampling rate (Hz).
+        window_sec: Size of sliding window in seconds.
+        step_sec: Step size for sliding window in seconds.
+
+    Returns:
+        Tuple of (time_points, rmssd_values).
+    """
+    try:
+        # Clean signal and find peaks
+        cleaned = nk.ppg_clean(bvp_signal, sampling_rate=fs)
+        peaks_dict = nk.ppg_findpeaks(cleaned, sampling_rate=fs)
+        peaks = peaks_dict['PPG_Peaks']
+    except Exception as e:
+        # print(f"[DEBUG] Error processing BVP for rolling RMSSD: {e}")
+        return np.array([]), np.array([])
+
+    if len(peaks) < 2:
+        return np.array([]), np.array([])
+
+    # Calculate NN intervals in ms
+    r_peaks_ms = peaks / fs * 1000
+    rr_intervals = np.diff(r_peaks_ms)
+    # Time of each RR interval (assigned to end of interval)
+    rr_times_ms = r_peaks_ms[1:]
+
+    # Rolling window
+    signal_duration_sec = len(bvp_signal) / fs
+    time_points = np.arange(0, signal_duration_sec, step_sec)
+    rmssd_values = []
+
+    window_ms = window_sec * 1000
+
+    for t_sec in time_points:
+        t_ms = t_sec * 1000
+        # Find RR intervals that fall within [t_ms, t_ms + window_ms]
+        mask = (rr_times_ms >= t_ms) & (rr_times_ms < t_ms + window_ms)
+        window_rrs = rr_intervals[mask]
+
+        if len(window_rrs) < 2:
+            rmssd_values.append(np.nan)
+        else:
+            # Calculate RMSSD: sqrt(mean(diff(RR)^2))
+            diff_rrs = np.diff(window_rrs)
+            rmssd = np.sqrt(np.mean(diff_rrs**2))
+            rmssd_values.append(rmssd)
+
+    return time_points, np.array(rmssd_values)
+
+
+def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
+    """Generate per-subject plots of rolling RMSSD across T1-T3.
+
+    Calculates RMSSD in a sliding window (30s) for each task and concatenates
+    them on a single timeline to show HRV evolution.
+
+    Args:
+        dataset_path: Path to UBFC-Phys/Data folder.
+        subject_group_map: Mapping of {subject_id: group}.
+
+    Outputs:
+        Saves to data_mining/subject_hrv_profiles/hrv_profile_{subject_id}.jpg
+    """
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hrv_profiles"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for subject_path in dmc.list_subject_paths(dataset_path):
+        subject_id = subject_path.name
+        group = subject_group_map.get(subject_id, 'unknown')
+        bvp_paths = dmc.list_bvp_paths(subject_path)
+
+        if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+            continue
+
+        # Store segments to concatenate
+        all_times = []
+        all_rmssd = []
+        boundaries = []
+        current_offset = 0
+
+        # Process T1, T2, T3 in order
+        for bvp_path in bvp_paths:
+            # task_id = bvp_path.stem.split('_')[-1]
+            bvp_data = dmc.read_bvp_data(bvp_path)
+            duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
+
+            # Calculate rolling RMSSD (30s window)
+            times, rmssd = calculate_rolling_rmssd(
+                bvp_data, dmc.BVP_SAMPLING_RATE_HZ, window_sec=30, step_sec=1
+            )
+
+            if len(times) == 0:
+                # Fallback for empty/failed processing: empty arrays with correct duration
+                times = np.arange(0, duration, 1)
+                rmssd = np.full(len(times), np.nan)
+
+            # Shift times by current cumulative offset
+            all_times.append(times + current_offset)
+            all_rmssd.append(rmssd)
+
+            current_offset += duration
+            boundaries.append(current_offset)
+
+        # Concatenate all tasks
+        full_time = np.concatenate(all_times)
+        full_rmssd = np.concatenate(all_rmssd)
+
+        # Plot
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Plot the RMSSD line
+        # Connect gaps with nan? matplotlib handles nan by breaking the line, which is correct
+        ax.plot(full_time, full_rmssd, color='#E91E63', linewidth=2, label='RMSSD (30s window)')
+
+        # Add vertical lines for task boundaries
+        # boundaries contains [end_T1, end_T1+end_T2, end_T1+end_T2+end_T3]
+        # We only need the first two for separation
+        for b in boundaries[:-1]:
+            ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
+
+        # Add task labels centered in each segment
+        # Segments: [0, b0], [b0, b1], [b1, b2]
+        segment_starts = [0] + boundaries[:-1]
+        segment_ends = boundaries
+        labels = ['T1', 'T2', 'T3']
+        
+        y_lims = ax.get_ylim()
+        # If all nan, y_lims might be (0.0, 1.0) or similar default
+        # We put labels at the top
+        
+        for start, end, lbl in zip(segment_starts, segment_ends, labels):
+            mid_point = (start + end) / 2
+            ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+        ax.set_xlabel('Time (s)', fontsize=12)
+        ax.set_ylabel('HRV RMSSD (ms)', fontsize=12)
+        ax.set_title(f'Subject {subject_id} ({group}) - HRV RMSSD Profile', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+
+        out_path = output_dir / f"hrv_profile_{subject_id}.jpg"
+        fig.savefig(out_path, dpi=100, bbox_inches='tight')
+        plt.close(fig)
+        # print(f"[INFO] Saved {out_path}")
+
+    print(f"[INFO] Saved per-subject HRV profiles to {output_dir}")
+
+
 def cluster_features(merged_df: pd.DataFrame) -> pd.DataFrame:
     """Apply clustering algorithms to analyze feature distribution (Sprint #2).
 
@@ -875,6 +1031,10 @@ if __name__ == "__main__":
 
     # Step 7: Plot HRV distribution by task
     plot_strip_hrv_by_task(merged_df)
+
+    # Step 7b: Plot Subject HRV Profile (Rolling RMSSD)
+    print("[INFO] Generating per-subject HRV profiles...")
+    plot_subject_rolling_hrv(dataset_path, subject_group_map)
 
     # --- Sprint #2 (Not implemented yet) ---
     # Step 8: Clustering analysis
