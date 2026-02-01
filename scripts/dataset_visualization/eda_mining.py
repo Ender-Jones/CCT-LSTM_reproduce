@@ -42,8 +42,12 @@ OUT_STRIP_PHASIC = "strip_task_vs_phasic_var.jpg"
 OUT_STRIP_SDNN = "strip_task_vs_hrv_sdnn.jpg"
 OUT_STRIP_RMSSD = "strip_task_vs_hrv_rmssd.jpg"
 OUT_BOX_PHASIC_STD = "box_task_vs_phasic_std.jpg"
+OUT_BOX_RMSSD = "box_task_vs_hrv_rmssd.jpg"
 OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
+
+# Outlier removal threshold (percentile)
+OUTLIER_PERCENTILE = 85
 
 
 def make_task_label(task_id: str, group: str) -> str:
@@ -312,9 +316,6 @@ def plot_scatter_tonic_vs_hr_hrv(merged_df: pd.DataFrame) -> None:
         ('hrv_rmssd', 'HRV RMSSD (ms)', OUT_SCATTER_TONIC_VS_RMSSD),
     ]
 
-    # Percentile threshold for outlier detection (98%)
-    OUTLIER_PERCENTILE = 98
-
     for y_col, y_label, filename in plot_configs:
         # Calculate Y-axis upper limit at 98 percentile
         y_upper_limit = merged_df[y_col].quantile(OUTLIER_PERCENTILE / 100)
@@ -408,8 +409,6 @@ def plot_strip_phasic_by_task(merged_df: pd.DataFrame) -> None:
     # Legend order for logical grouping
     hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
 
-    # Percentile threshold for outlier detection (98%)
-    OUTLIER_PERCENTILE = 98
     x_upper_limit = merged_df['phasic_var'].quantile(OUTLIER_PERCENTILE / 100)
 
     # Split data into normal points and outliers
@@ -534,6 +533,86 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
+def plot_box_rmssd_by_task(merged_df: pd.DataFrame) -> None:
+    """Plot box plot showing HRV RMSSD distribution by task_label.
+
+    Creates a box plot with task_label on X-axis and hrv_rmssd on Y-axis.
+    Includes individual data points as a strip plot overlay.
+    Excludes outliers above OUTLIER_PERCENTILE.
+
+    Args:
+        merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
+            'hrv_rmssd' column.
+
+    Returns:
+        None.
+
+    Outputs:
+        Saves to DATA_MINING_OUTPUT_DIR:
+            - box_task_vs_hrv_rmssd.jpg
+    """
+    if merged_df.empty or 'hrv_rmssd' not in merged_df.columns:
+        print("[WARN] No hrv_rmssd data available. Skipping box plot.")
+        return
+
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Filter outliers
+    y_upper_limit = merged_df['hrv_rmssd'].quantile(OUTLIER_PERCENTILE / 100)
+    filtered_df = merged_df[merged_df['hrv_rmssd'] <= y_upper_limit].copy()
+    outlier_count = len(merged_df) - len(filtered_df)
+    if outlier_count > 0:
+        print(f"[INFO] Excluded {outlier_count} outliers (>{OUTLIER_PERCENTILE}th percentile, >{y_upper_limit:.2f}) for RMSSD box plot.")
+
+    # 5-class color palette
+    task_palette = {
+        'T1':      '#4CAF50',  # green - baseline
+        'T2-ctrl': '#90CAF9',  # light blue - easy task
+        'T2-test': '#1565C0',  # dark blue - hard task
+        'T3-ctrl': '#EF9A9A',  # light red - easy task
+        'T3-test': '#C62828',  # dark red - hard task
+    }
+
+    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+    
+    # Box plot for distribution statistics
+    sns.boxplot(
+        data=filtered_df,
+        x='task_label',
+        y='hrv_rmssd',
+        palette=task_palette,
+        order=hue_order,
+        showfliers=False,
+        ax=ax
+    )
+    
+    # Strip plot overlay for individual points
+    sns.stripplot(
+        data=filtered_df,
+        x='task_label',
+        y='hrv_rmssd',
+        color='black',
+        order=hue_order,
+        size=4,
+        alpha=0.3,
+        jitter=True,
+        ax=ax
+    )
+
+    ax.set_xlabel('Task-Group', fontsize=12)
+    ax.set_ylabel('HRV RMSSD (ms)', fontsize=12)
+    ax.set_title(f'HRV RMSSD Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_RMSSD
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {output_path}")
+
+
 def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
     """Plot strip plots showing HRV metrics distribution by task_label.
 
@@ -575,8 +654,6 @@ def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
         ('hrv_sdnn', 'HRV SDNN (ms)', OUT_STRIP_SDNN),
         ('hrv_rmssd', 'HRV RMSSD (ms)', OUT_STRIP_RMSSD),
     ]
-
-    OUTLIER_PERCENTILE = 98
 
     for y_col, y_label, filename in hrv_configs:
         if y_col not in merged_df.columns:
@@ -1074,7 +1151,10 @@ if __name__ == "__main__":
     # Step 5b: Plot phasic standard deviation distribution by task (New Request)
     plot_box_phasic_std_by_task(merged_df)
 
-    # Step 5c: Plot interaction feature (Tonic Slope * Phasic Std) - Professor Request
+    # Step 5c: Plot HRV RMSSD distribution by task (New Request)
+    plot_box_rmssd_by_task(merged_df)
+
+    # Step 5d: Plot interaction feature (Tonic Slope * Phasic Std) - Professor Request
     plot_box_interaction_feature(merged_df)
 
     # Step 6: Plot interactive 3D EDA feature space (Plotly)
