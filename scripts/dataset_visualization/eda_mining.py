@@ -47,7 +47,7 @@ OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 
 # Outlier removal threshold (percentile)
-OUTLIER_PERCENTILE = 85
+OUTLIER_PERCENTILE = 90
 
 
 def make_task_label(task_id: str, group: str) -> str:
@@ -466,6 +466,7 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
 
     Creates a box plot with task_label on X-axis and phasic_std on Y-axis.
     Includes individual data points as a strip plot overlay.
+    Excludes outliers above OUTLIER_PERCENTILE.
 
     Args:
         merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
@@ -484,6 +485,13 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
 
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Filter outliers
+    y_upper_limit = merged_df['phasic_std'].quantile(OUTLIER_PERCENTILE / 100)
+    filtered_df = merged_df[merged_df['phasic_std'] <= y_upper_limit].copy()
+    outlier_count = len(merged_df) - len(filtered_df)
+    if outlier_count > 0:
+        print(f"[INFO] Excluded {outlier_count} outliers (>{OUTLIER_PERCENTILE}th percentile, >{y_upper_limit:.2f}) for Phasic Std box plot.")
+
     # 5-class color palette
     task_palette = {
         'T1':      '#4CAF50',  # green - baseline
@@ -499,7 +507,7 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
     
     # Box plot for distribution statistics
     sns.boxplot(
-        data=merged_df,
+        data=filtered_df,
         x='task_label',
         y='phasic_std',
         palette=task_palette,
@@ -510,7 +518,7 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
     
     # Strip plot overlay for individual points
     sns.stripplot(
-        data=merged_df,
+        data=filtered_df,
         x='task_label',
         y='phasic_std',
         color='black',
@@ -523,7 +531,7 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
 
     ax.set_xlabel('Task-Group', fontsize=12)
     ax.set_ylabel('EDA Phasic Standard Deviation (µS)', fontsize=12)
-    ax.set_title('EDA Phasic Std Distribution by Task', fontsize=14, fontweight='bold')
+    ax.set_title(f'EDA Phasic Std Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)', fontsize=14, fontweight='bold')
 
     plt.tight_layout()
 
