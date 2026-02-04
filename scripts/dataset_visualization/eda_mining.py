@@ -509,11 +509,14 @@ def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
     sns.boxplot(
         data=filtered_df,
         x='task_label',
+        hue='task_label',
         y='phasic_std',
         palette=task_palette,
         order=hue_order,
+        hue_order=hue_order,
         showfliers=False,  # Hide outliers to avoid duplication with strip plot
-        ax=ax
+        ax=ax,
+        legend=False,
     )
     
     # Strip plot overlay for individual points
@@ -589,11 +592,14 @@ def plot_box_rmssd_by_task(merged_df: pd.DataFrame) -> None:
     sns.boxplot(
         data=filtered_df,
         x='task_label',
+        hue='task_label',
         y='hrv_rmssd',
         palette=task_palette,
         order=hue_order,
+        hue_order=hue_order,
         showfliers=False,
-        ax=ax
+        ax=ax,
+        legend=False,
     )
     
     # Strip plot overlay for individual points
@@ -766,11 +772,14 @@ def plot_box_interaction_feature(merged_df: pd.DataFrame) -> None:
     sns.boxplot(
         data=merged_df,
         x='task_label',
+        hue='task_label',
         y='interaction_feature',
         palette=task_palette,
         order=hue_order,
+        hue_order=hue_order,
         showfliers=False,
-        ax=ax
+        ax=ax,
+        legend=False,
     )
 
     # Strip plot overlay
@@ -788,6 +797,9 @@ def plot_box_interaction_feature(merged_df: pd.DataFrame) -> None:
 
     # Add a horizontal line at 0 to distinguish increasing vs decreasing trend interactions
     ax.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+
+    # Fixed Y-axis range for better visibility of T1/T3
+    ax.set_ylim(-0.00001, 0.00001)
 
     ax.set_xlabel('Task-Group', fontsize=12)
     ax.set_ylabel('Tonic Slope x Phasic Std', fontsize=12)
