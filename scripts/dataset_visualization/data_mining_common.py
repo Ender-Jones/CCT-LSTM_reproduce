@@ -203,6 +203,34 @@ def has_expected_eda_files(eda_paths: list[Path], subject_path: Path) -> bool:
 
 
 # =============================================================================
+# rPPG Data I/O
+# =============================================================================
+
+def list_rppg_paths(subject_path: Path) -> list[Path]:
+    """List all rPPG JSON files in a subject directory.
+
+    Finds files matching pattern '*_rppg.json' (e.g., vid_s1_T1_rppg.json).
+
+    Args:
+        subject_path: Path to a subject folder (e.g., .../Data/s1).
+
+    Returns:
+        Sorted list of Path objects for each rPPG file.
+
+    Outputs:
+        None.
+    """
+    rppg_paths: list[Path] = []
+    rppg_dir = subject_path / 'rppg_signals'
+    if not rppg_dir.is_dir():
+        print(f"[WARN] {subject_path}: rppg_signals directory not found. Skipping.")
+        return rppg_paths
+    for entry in rppg_dir.iterdir():
+        if entry.is_file() and entry.name.endswith("rppg.json"):
+            rppg_paths.append(entry)
+    return sorted(rppg_paths, key=lambda p: p.name)
+
+# =============================================================================
 # BVP/PPG Data I/O
 # =============================================================================
 
