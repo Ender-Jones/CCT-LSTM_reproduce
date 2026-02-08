@@ -17,6 +17,7 @@ Data Pipeline:
 Output Directory: scripts/dataset_visualization/data_mining/
 """
 
+import json
 import warnings
 from pathlib import Path
 
@@ -43,6 +44,7 @@ OUT_STRIP_SDNN = "strip_task_vs_hrv_sdnn.jpg"
 OUT_STRIP_RMSSD = "strip_task_vs_hrv_rmssd.jpg"
 OUT_BOX_PHASIC_STD = "box_task_vs_phasic_std.jpg"
 OUT_BOX_RMSSD = "box_task_vs_hrv_rmssd.jpg"
+OUT_BOX_RPPG_RMSSD = "box_task_vs_rppg_hrv_rmssd.jpg"
 OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 
@@ -144,6 +146,131 @@ def extract_eda_features(dataset_path: Path, subject_group_map: dict[str, str]) 
     return result
 
 
+def clean_rr_intervals_from_peaks(
+    peaks: list[int] | np.ndarray,
+    sampling_rate_hz: float,
+    *,
+    interval_min_ms: float = 250.0,
+    interval_max_ms: float = 1300.0,
+    min_valid_ratio: float = 0.8,
+    min_valid_intervals: int = 10,
+    fixpeaks_method: str = "Kubios",
+    iterative: bool = True,
+) -> tuple[dict[str, np.ndarray] | None, dict[str, float]]:
+    """Generate 'cleaned RR/NN interval series' (with interpolation) from peak positions for HRV calculation.
+
+    Processing pipeline:
+    1) Use nk.signal_fixpeaks(method="Kubios") to correct missed/extra/misaligned peaks (iterative).
+    2) Calculate RR intervals (ms).
+    3) Mark invalid RRs using absolute physiological gating [interval_min_ms, interval_max_ms].
+    4) Replace invalid RRs with linear interpolation (avoids dropping points which causes sample shortage/gaps).
+    5) If 'valid RRs' are too few (insufficient ratio or count), return None.
+
+    Args:
+        peaks: Peak positions (sample indices), monotonically increasing.
+        sampling_rate_hz: Sampling rate (Hz).
+        interval_min_ms: Minimum RR threshold (ms), default 250ms.
+        interval_max_ms: Maximum RR threshold (ms), default 1300ms.
+        min_valid_ratio: Minimum ratio of valid RRs required before gating.
+        min_valid_intervals: Minimum number of valid RRs required before gating.
+        fixpeaks_method: Method name for nk.signal_fixpeaks, default "Kubios".
+        iterative: Whether to use iterative correction (recommended True for Kubios).
+
+    Returns:
+        (rri_dict, qc_summary)
+        - rri_dict: Dictionary compatible with nk.hrv_time(), containing:
+            - "RRI": RR intervals (ms)
+            - "RRI_Time": RR timestamps (seconds, at the time of the second peak of each RR)
+          Returns None if valid RRs are insufficient.
+        - qc_summary: Quality control summary (for logging/tuning).
+    """
+    qc: dict[str, float] = {
+        "n_peaks_in": float(len(peaks)),
+        "n_peaks_fixed": 0.0,
+        "n_rr_total": 0.0,
+        "n_rr_valid": 0.0,
+        "valid_ratio": 0.0,
+    }
+
+    if sampling_rate_hz is None or not np.isfinite(sampling_rate_hz) or sampling_rate_hz <= 0:
+        return None, qc
+
+    peaks_arr = np.asarray(peaks, dtype=float)
+    peaks_arr = peaks_arr[np.isfinite(peaks_arr)]
+    peaks_arr = peaks_arr.astype(int, copy=False)
+    if peaks_arr.size < 5:
+        qc["n_peaks_fixed"] = float(peaks_arr.size)
+        return None, qc
+
+    peaks_arr = np.unique(peaks_arr)
+    peaks_arr.sort(kind="mergesort")
+    if peaks_arr.size < 5:
+        qc["n_peaks_fixed"] = float(peaks_arr.size)
+        return None, qc
+
+    try:
+        if fixpeaks_method.lower() == "kubios":
+            artifacts, peaks_fixed = nk.signal_fixpeaks(
+                peaks_arr,
+                sampling_rate=float(sampling_rate_hz),
+                iterative=iterative,
+                method="Kubios",
+            )
+            _ = artifacts  # artifacts can be used for further debugging/visualization
+        else:
+            peaks_fixed = nk.signal_fixpeaks(
+                peaks_arr,
+                sampling_rate=float(sampling_rate_hz),
+                iterative=iterative,
+                method=fixpeaks_method,
+            )
+    except Exception:
+        return None, qc
+
+    peaks_fixed = np.asarray(peaks_fixed, dtype=float)
+    peaks_fixed = peaks_fixed[np.isfinite(peaks_fixed)].astype(int, copy=False)
+    peaks_fixed = np.unique(peaks_fixed)
+    peaks_fixed.sort(kind="mergesort")
+    qc["n_peaks_fixed"] = float(peaks_fixed.size)
+    if peaks_fixed.size < 5:
+        return None, qc
+
+    # RR intervals (ms) and timestamps (s at 2nd peak)
+    rri_ms = np.diff(peaks_fixed) / float(sampling_rate_hz) * 1000.0
+    rri_time_s = peaks_fixed[1:] / float(sampling_rate_hz)
+
+    qc["n_rr_total"] = float(rri_ms.size)
+    if rri_ms.size < 2:
+        return None, qc
+
+    valid = np.isfinite(rri_ms) & (rri_ms >= interval_min_ms) & (rri_ms <= interval_max_ms)
+    n_valid = int(np.sum(valid))
+    qc["n_rr_valid"] = float(n_valid)
+    qc["valid_ratio"] = float(n_valid / rri_ms.size)
+
+    # Too few valid RRs: discard this record
+    if n_valid < min_valid_intervals or (n_valid / rri_ms.size) < min_valid_ratio:
+        return None, qc
+
+    # Replace invalid RRs with linear interpolation (avoid dropping points causing sample shortage)
+    rri_interp = rri_ms.astype(float, copy=True)
+    invalid_idx = np.where(~valid)[0]
+    if invalid_idx.size > 0:
+        valid_idx = np.where(valid)[0]
+        if valid_idx.size < 2:
+            return None, qc
+        interp_values = np.interp(np.arange(rri_ms.size), valid_idx, rri_ms[valid_idx])
+        rri_interp[~valid] = interp_values[~valid]
+        # Clip as a fallback to ensure interpolated values are within bounds
+        rri_interp = np.clip(rri_interp, interval_min_ms, interval_max_ms)
+
+    rri_dict = {
+        "RRI": rri_interp,
+        "RRI_Time": rri_time_s.astype(float, copy=False),
+    }
+    return rri_dict, qc
+
+
 def extract_ppg_features(dataset_path: Path, subject_group_map: dict[str, str]) -> list[dict]:
     """Extract HR and HRV features from PPG/BVP signals for each (subject, task) pair.
 
@@ -188,17 +315,34 @@ def extract_ppg_features(dataset_path: Path, subject_group_map: dict[str, str]) 
                 # process the bvp data
                 signals, info = nk.ppg_process(bvp_data, sampling_rate=dmc.BVP_SAMPLING_RATE_HZ)
 
-                # get the hr mean
-                hr_mean = signals['PPG_Rate'].mean()
-
                 # get the peaks for hrv calculation
                 peaks = info['PPG_Peaks']
                 if len(peaks) < 5:
                     print(f"[WARN] {bvp_path}: Not enough peaks ({len(peaks)}) for HRV. Skipping.")
                     continue
 
+                rri_dict, qc = clean_rr_intervals_from_peaks(
+                    peaks,
+                    dmc.BVP_SAMPLING_RATE_HZ,
+                    interval_min_ms=250.0,
+                    interval_max_ms=1300.0,
+                    min_valid_ratio=0.8,
+                    min_valid_intervals=10,
+                    fixpeaks_method="Kubios",
+                    iterative=True,
+                )
+                if rri_dict is None:
+                    print(
+                        f"[WARN] {bvp_path}: RR QC failed "
+                        f"(valid_ratio={qc['valid_ratio']:.2f}, valid_rr={int(qc['n_rr_valid'])}/{int(qc['n_rr_total'])}). Skipping."
+                    )
+                    continue
+
+                # hr mean from cleaned RR (bpm)
+                hr_mean = float(np.nanmean(60000.0 / np.asarray(rri_dict["RRI"], dtype=float)))
+
                 # calculate the hrv
-                hrv_df = nk.hrv_time(peaks, sampling_rate=dmc.BVP_SAMPLING_RATE_HZ)
+                hrv_df = nk.hrv_time(rri_dict, sampling_rate=dmc.BVP_SAMPLING_RATE_HZ)
                 hrv_sdnn = hrv_df['HRV_SDNN'].iloc[0]
                 hrv_rmssd = hrv_df['HRV_RMSSD'].iloc[0]
 
@@ -219,8 +363,106 @@ def extract_ppg_features(dataset_path: Path, subject_group_map: dict[str, str]) 
     return result
 
 
-def merge_eda_and_ppg_features(eda_features: list[dict], ppg_features: list[dict]) -> pd.DataFrame:
-    """Merge EDA and PPG feature lists into a single DataFrame.
+def extract_rppg_features(dataset_path: Path, subject_group_map: dict[str, str]) -> list[dict]:
+    """Extract HRV RMSSD features from rPPG signals for each (subject, task) pair.
+
+    Reads rPPG JSON files from each subject's rppg_signals directory and computes
+    HRV RMSSD per window, then aggregates by mean for the task.
+
+    Args:
+        dataset_path: Path to UBFC-Phys/Data folder.
+        subject_group_map: Mapping of {subject_id: group} from master_manifest.csv.
+
+    Returns:
+        List of dicts, each containing:
+            - subject, task, group, task_label
+            - rppg_hrv_rmssd
+    """
+    result: list[dict] = []
+
+    for subject_path in dmc.list_subject_paths(dataset_path):
+        subject_id = subject_path.name
+        group = subject_group_map.get(subject_id, 'unknown')
+        rppg_paths = dmc.list_rppg_paths(subject_path)
+
+        if len(rppg_paths) != 3:
+            print(
+                f"[WARN] {subject_path}: expected 3 rPPG files (T1/T2/T3), got {len(rppg_paths)}. Skipping."
+            )
+            continue
+
+        for rppg_path in rppg_paths:
+            # vid_s1_T1_rppg.json -> T1
+            task_id = rppg_path.stem.split('_')[2]
+            task_label = make_task_label(task_id, group)
+
+            try:
+                with rppg_path.open("r", encoding="utf-8") as f:
+                    rppg_data = json.load(f)
+            except Exception as e:
+                print(f"[WARN] {rppg_path}: Failed to read rPPG JSON: {e}. Skipping.")
+                continue
+
+            window_rmssd: list[float] = []
+            for window in rppg_data:
+                bvp_signal = window.get('bvp_signal', [])
+                fps = window.get('fps=sampling_rate', window.get('fps'))
+
+                if not bvp_signal or fps is None:
+                    continue
+
+                try:
+                    fs = float(fps)
+                    if not np.isfinite(fs) or fs <= 0:
+                        continue
+                    fs_int = int(round(fs))
+                    signals, info = nk.ppg_process(bvp_signal, sampling_rate=fs_int)
+                    peaks = info['PPG_Peaks']
+                    if len(peaks) < 5:
+                        continue
+
+                    rri_dict, _qc = clean_rr_intervals_from_peaks(
+                        peaks,
+                        fs_int,
+                        interval_min_ms=250.0,
+                        interval_max_ms=1300.0,
+                        min_valid_ratio=0.8,
+                        min_valid_intervals=10,
+                        fixpeaks_method="Kubios",
+                        iterative=True,
+                    )
+                    if rri_dict is None:
+                        continue
+
+                    hrv_df = nk.hrv_time(rri_dict, sampling_rate=fs_int)
+                    rmssd = hrv_df['HRV_RMSSD'].iloc[0]
+                    if np.isfinite(rmssd):
+                        window_rmssd.append(rmssd)
+                except Exception:
+                    continue
+
+            if not window_rmssd:
+                print(f"[WARN] {rppg_path}: No valid rPPG windows for HRV. Skipping.")
+                continue
+
+            result.append({
+                'subject': subject_id,
+                'task': task_id,
+                'group': group,
+                'task_label': task_label,
+                'rppg_hrv_rmssd': float(np.mean(window_rmssd)),
+            })
+
+    print(f"[INFO] Extracted rPPG HRV features from {len(result)} records.")
+    return result
+
+
+def merge_eda_and_ppg_features(
+    eda_features: list[dict],
+    ppg_features: list[dict],
+    rppg_features: list[dict] | None = None,
+) -> pd.DataFrame:
+    """Merge EDA, PPG, and rPPG feature lists into a single DataFrame.
 
     Performs inner join on (subject, task, group, task_label) keys and saves
     the merged DataFrame to CSV for downstream analysis.
@@ -228,11 +470,12 @@ def merge_eda_and_ppg_features(eda_features: list[dict], ppg_features: list[dict
     Args:
         eda_features: List of dicts from extract_eda_features().
         ppg_features: List of dicts from extract_ppg_features().
+        rppg_features: Optional list of dicts from extract_rppg_features().
 
     Returns:
         Merged DataFrame with columns:
             [subject, task, group, task_label, tonic_mean, tonic_median, tonic_slope,
-             phasic_var, phasic_std, hr_mean, hrv_sdnn, hrv_rmssd]
+             phasic_var, phasic_std, hr_mean, hrv_sdnn, hrv_rmssd, rppg_hrv_rmssd]
 
     Outputs:
         Saves to DATA_MINING_OUTPUT_DIR:
@@ -247,6 +490,16 @@ def merge_eda_and_ppg_features(eda_features: list[dict], ppg_features: list[dict
         how='inner'
     )
     print(f"[INFO] Merged {len(merged_df)} records (EDA: {len(eda_df)}, HR: {len(hr_df)}).")
+
+    if rppg_features is not None:
+        rppg_df = pd.DataFrame(rppg_features)
+        if not rppg_df.empty:
+            merged_df = pd.merge(
+                merged_df, rppg_df,
+                on=['subject', 'task', 'group', 'task_label'],
+                how='left'
+            )
+            print(f"[INFO] Added rPPG HRV features (rPPG: {len(rppg_df)}).")
 
     # Save merged CSV
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -627,6 +880,96 @@ def plot_box_rmssd_by_task(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
+def plot_box_rppg_rmssd_by_task(merged_df: pd.DataFrame) -> None:
+    """Plot box plot showing rPPG HRV RMSSD distribution by task_label.
+
+    Creates a box plot with task_label on X-axis and rppg_hrv_rmssd on Y-axis.
+    Includes individual data points as a strip plot overlay.
+    Excludes outliers above OUTLIER_PERCENTILE.
+
+    Args:
+        merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
+            'rppg_hrv_rmssd' column.
+
+    Returns:
+        None.
+
+    Outputs:
+        Saves to DATA_MINING_OUTPUT_DIR:
+            - box_task_vs_rppg_hrv_rmssd.jpg
+    """
+    if merged_df.empty or 'rppg_hrv_rmssd' not in merged_df.columns:
+        print("[WARN] No rppg_hrv_rmssd data available. Skipping box plot.")
+        return
+
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Filter outliers
+    y_upper_limit = merged_df['rppg_hrv_rmssd'].quantile(OUTLIER_PERCENTILE / 100)
+    filtered_df = merged_df[merged_df['rppg_hrv_rmssd'] <= y_upper_limit].copy()
+    outlier_count = len(merged_df) - len(filtered_df)
+    if outlier_count > 0:
+        print(
+            f"[INFO] Excluded {outlier_count} outliers (>{OUTLIER_PERCENTILE}th percentile, "
+            f">{y_upper_limit:.2f}) for rPPG RMSSD box plot."
+        )
+
+    # 5-class color palette
+    task_palette = {
+        'T1':      '#4CAF50',  # green - baseline
+        'T2-ctrl': '#90CAF9',  # light blue - easy task
+        'T2-test': '#1565C0',  # dark blue - hard task
+        'T3-ctrl': '#EF9A9A',  # light red - easy task
+        'T3-test': '#C62828',  # dark red - hard task
+    }
+
+    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Box plot for distribution statistics
+    sns.boxplot(
+        data=filtered_df,
+        x='task_label',
+        hue='task_label',
+        y='rppg_hrv_rmssd',
+        palette=task_palette,
+        order=hue_order,
+        hue_order=hue_order,
+        showfliers=False,
+        ax=ax,
+        legend=False,
+    )
+
+    # Strip plot overlay for individual points
+    sns.stripplot(
+        data=filtered_df,
+        x='task_label',
+        y='rppg_hrv_rmssd',
+        color='black',
+        order=hue_order,
+        size=4,
+        alpha=0.3,
+        jitter=True,
+        ax=ax
+    )
+
+    ax.set_xlabel('Task-Group', fontsize=12)
+    ax.set_ylabel('rPPG HRV RMSSD (ms)', fontsize=12)
+    ax.set_title(
+        f'rPPG HRV RMSSD Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)',
+        fontsize=14,
+        fontweight='bold'
+    )
+
+    plt.tight_layout()
+
+    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_RPPG_RMSSD
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {output_path}")
+
+
 def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
     """Plot strip plots showing HRV metrics distribution by task_label.
 
@@ -898,7 +1241,7 @@ def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 
     """Calculate rolling RMSSD from BVP signal.
 
     1. Cleans BVP signal and finds peaks.
-    2. Calculates RR intervals.
+    2. Fixes peaks (Kubios) and cleans RR intervals (250-1300ms, interpolate).
     3. Computes RMSSD in sliding windows.
 
     Args:
@@ -919,14 +1262,25 @@ def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 
         # print(f"[DEBUG] Error processing BVP for rolling RMSSD: {e}")
         return np.array([]), np.array([])
 
-    if len(peaks) < 2:
+    if len(peaks) < 5:
         return np.array([]), np.array([])
 
-    # Calculate NN intervals in ms
-    r_peaks_ms = peaks / fs * 1000
-    rr_intervals = np.diff(r_peaks_ms)
-    # Time of each RR interval (assigned to end of interval)
-    rr_times_ms = r_peaks_ms[1:]
+    rri_dict, _qc = clean_rr_intervals_from_peaks(
+        peaks,
+        fs,
+        interval_min_ms=250.0,
+        interval_max_ms=1300.0,
+        min_valid_ratio=0.8,
+        min_valid_intervals=10,
+        fixpeaks_method="Kubios",
+        iterative=True,
+    )
+    if rri_dict is None:
+        return np.array([]), np.array([])
+
+    # Cleaned NN intervals in ms + timestamps (s at end of interval)
+    rr_intervals = np.asarray(rri_dict["RRI"], dtype=float)
+    rr_times_ms = np.asarray(rri_dict["RRI_Time"], dtype=float) * 1000.0
 
     # Rolling window
     signal_duration_sec = len(bvp_signal) / fs
@@ -1159,8 +1513,11 @@ if __name__ == "__main__":
     # Step 2: Extract PPG features (HR/HRV) for all (subject, task) pairs
     ppg_features = extract_ppg_features(dataset_path, subject_group_map)
 
-    # Step 3: Merge EDA and PPG features into single DataFrame
-    merged_df = merge_eda_and_ppg_features(eda_features, ppg_features)
+    # Step 2b: Extract rPPG HRV features (from rppg_signals JSON)
+    rppg_features = extract_rppg_features(dataset_path, subject_group_map)
+
+    # Step 3: Merge EDA, PPG, and rPPG features into single DataFrame
+    merged_df = merge_eda_and_ppg_features(eda_features, ppg_features, rppg_features)
 
     # Step 4: Plot scatter plots (tonic vs HR/HRV)
     plot_scatter_tonic_vs_hr_hrv(merged_df)
@@ -1173,6 +1530,9 @@ if __name__ == "__main__":
 
     # Step 5c: Plot HRV RMSSD distribution by task (New Request)
     plot_box_rmssd_by_task(merged_df)
+
+    # Step 5c2: Plot rPPG HRV RMSSD distribution by task (New Request)
+    plot_box_rppg_rmssd_by_task(merged_df)
 
     # Step 5d: Plot interaction feature (Tonic Slope * Phasic Std) - Professor Request
     plot_box_interaction_feature(merged_df)
