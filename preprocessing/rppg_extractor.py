@@ -44,7 +44,7 @@ Expected JSON Schema (per-window)
     "window_id": <int>,
     "start_frame": <int>,
     "end_frame": <int>,
-    "fps": <float>,
+    "fps=sampling_rate": <float>,  # sampling_rate is the fps of video
     "bvp_signal": [<float>, ...]  # 1D array length ~= (end_frame - start_frame + 1)
   },
   ...
@@ -203,7 +203,7 @@ class RppgExtractor:
                 'window_id': window_id,
                 'start_frame': start_frame,
                 'end_frame': end_frame - 1,
-                'fps': fps,
+                'fps=sampling_rate': fps,  # sampling_rate is the fps of video
                 'bvp_signal': bvp_signal_list
             }
             all_windows_data.append(window_data)
