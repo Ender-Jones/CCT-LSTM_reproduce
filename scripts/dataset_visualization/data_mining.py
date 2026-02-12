@@ -56,6 +56,9 @@ ROLLING_WINDOW_SEC = 3
 # Stride is defined in BVP samples to avoid mixing with "Hz" terminology.
 ROLLING_STRIDE_SAMPLES = 1
 ROLLING_BVP_STEP_SEC = ROLLING_STRIDE_SAMPLES / dmc.BVP_SAMPLING_RATE_HZ
+# Rolling profile export DPI
+ROLLING_SUBJECT_PLOT_DPI = 200
+ROLLING_GROUP_PLOT_DPI = 300
 
 
 def make_task_label(task_id: str, group: str) -> str:
@@ -1550,7 +1553,7 @@ def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, st
         ax.legend(loc='upper right')
 
         out_path = output_dir / f"hrv_profile_{subject_id}.jpg"
-        fig.savefig(out_path, dpi=100, bbox_inches='tight')
+        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
 
     print(f"[INFO] Saved per-subject HRV profiles to {output_dir}")
@@ -1612,7 +1615,7 @@ def plot_subject_rolling_hr(dataset_path: Path, subject_group_map: dict[str, str
         ax.legend(loc='upper right')
 
         out_path = output_dir / f"hr_profile_{subject_id}.jpg"
-        fig.savefig(out_path, dpi=100, bbox_inches='tight')
+        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
 
         # Save plotted HR curve data alongside JPG (one row per data point)
@@ -1677,7 +1680,7 @@ def plot_group_rolling_hrv(subject_paths: list[Path], group_name: str, subject_g
     
     plt.tight_layout()
     out_path = output_dir / f"hrv_profile_{group_name}.jpg"
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved {out_path}")
 
@@ -1738,7 +1741,7 @@ def plot_group_rolling_hr(subject_paths: list[Path], group_name: str, subject_gr
 
     plt.tight_layout()
     out_path = output_dir / f"hr_profile_{group_name}.jpg"
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved {out_path}")
 
@@ -1837,7 +1840,7 @@ def plot_subject_bvp_profile(dataset_path: Path, subject_group_map: dict[str, st
         ax.legend(loc='upper right')
 
         out_path = output_dir / f"bvp_profile_{subject_id}.jpg"
-        fig.savefig(out_path, dpi=100, bbox_inches='tight')
+        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
 
     print(f"[INFO] Saved per-subject BVP profiles to {output_dir}")
@@ -1885,7 +1888,7 @@ def plot_group_bvp_profile(subject_paths: list[Path], group_name: str, subject_g
 
     plt.tight_layout()
     out_path = output_dir / f"bvp_profile_{group_name}.jpg"
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved {out_path}")
 
