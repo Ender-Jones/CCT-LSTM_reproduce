@@ -45,6 +45,7 @@ OUT_STRIP_RMSSD = "strip_task_vs_hrv_rmssd.jpg"
 OUT_BOX_PHASIC_STD = "box_task_vs_phasic_std.jpg"
 OUT_BOX_RMSSD = "box_task_vs_hrv_rmssd.jpg"
 OUT_BOX_RPPG_RMSSD = "box_task_vs_rppg_hrv_rmssd.jpg"
+OUT_BOX_HR_MEDIAN = "box_task_vs_hr_median.jpg"
 OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 
@@ -293,7 +294,7 @@ def extract_ppg_features(dataset_path: Path, subject_group_map: dict[str, str]) 
     Returns:
         List of dicts, each containing:
             - subject, task, group, task_label
-            - hr_mean, hrv_sdnn, hrv_rmssd
+            - hr_mean, hr_median, hrv_sdnn, hrv_rmssd
 
     Outputs:
         None (no files saved).
@@ -348,7 +349,9 @@ def extract_ppg_features(dataset_path: Path, subject_group_map: dict[str, str]) 
                     continue
 
                 # hr mean from cleaned RR (bpm)
-                hr_mean = float(np.nanmean(60000.0 / np.asarray(rri_dict["RRI"], dtype=float)))
+                hr_bpm_series = 60000.0 / np.asarray(rri_dict["RRI"], dtype=float)
+                hr_mean = float(np.nanmean(hr_bpm_series))
+                hr_median = float(np.nanmedian(hr_bpm_series))
 
                 # calculate the hrv
                 hrv_df = nk.hrv_time(rri_dict, sampling_rate=dmc.BVP_SAMPLING_RATE_HZ)
@@ -361,6 +364,7 @@ def extract_ppg_features(dataset_path: Path, subject_group_map: dict[str, str]) 
                     'group': group,
                     'task_label': task_label,
                     'hr_mean': hr_mean,
+                    'hr_median': hr_median,
                     'hrv_sdnn': hrv_sdnn,
                     'hrv_rmssd': hrv_rmssd,
                 })
@@ -484,7 +488,7 @@ def merge_eda_and_ppg_features(
     Returns:
         Merged DataFrame with columns:
             [subject, task, group, task_label, tonic_mean, tonic_median, tonic_slope,
-             phasic_var, phasic_std, hr_mean, hrv_sdnn, hrv_rmssd, rppg_hrv_rmssd]
+             phasic_var, phasic_std, hr_mean, hr_median, hrv_sdnn, hrv_rmssd, rppg_hrv_rmssd]
 
     Outputs:
         Saves to DATA_MINING_OUTPUT_DIR:
@@ -974,6 +978,66 @@ def plot_box_rppg_rmssd_by_task(merged_df: pd.DataFrame) -> None:
     plt.tight_layout()
 
     output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_RPPG_RMSSD
+    fig.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {output_path}")
+
+
+def plot_box_hr_median_by_task(merged_df: pd.DataFrame) -> None:
+    """Plot box plot of per-subject-task median heartbeat rate by task_label.
+
+    X-axis follows fixed order:
+        T1, T2-ctrl, T2-test, T3-ctrl, T3-test.
+    Y-axis is hr_median (median of beat-wise HR in bpm) for each subject-task pair.
+    """
+    if merged_df.empty or 'hr_median' not in merged_df.columns:
+        print("[WARN] No hr_median data available. Skipping HR median box plot.")
+        return
+
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    task_palette = {
+        'T1':      '#4CAF50',  # green - baseline
+        'T2-ctrl': '#90CAF9',  # light blue - easy task
+        'T2-test': '#1565C0',  # dark blue - hard task
+        'T3-ctrl': '#EF9A9A',  # light red - easy task
+        'T3-test': '#C62828',  # dark red - hard task
+    }
+    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    sns.boxplot(
+        data=merged_df,
+        x='task_label',
+        hue='task_label',
+        y='hr_median',
+        palette=task_palette,
+        order=hue_order,
+        hue_order=hue_order,
+        ax=ax,
+        legend=False,
+    )
+
+    sns.stripplot(
+        data=merged_df,
+        x='task_label',
+        y='hr_median',
+        color='black',
+        order=hue_order,
+        size=4,
+        alpha=0.3,
+        jitter=True,
+        ax=ax,
+    )
+
+    ax.set_xlabel('Task-Group', fontsize=12)
+    ax.set_ylabel('Median Heart Rate (bpm)', fontsize=12)
+    ax.set_title('Median Heart Rate Distribution by Task', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+
+    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_HR_MEDIAN
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved {output_path}")
@@ -1968,6 +2032,9 @@ if __name__ == "__main__":
 
     # Step 5c: Plot HRV RMSSD distribution by task (New Request)
     plot_box_rmssd_by_task(merged_df)
+
+    # Step 5c1: Plot median heartbeat rate distribution by task
+    plot_box_hr_median_by_task(merged_df)
 
     # Step 5c2: Plot rPPG HRV RMSSD distribution by task (New Request)
     plot_box_rppg_rmssd_by_task(merged_df)
