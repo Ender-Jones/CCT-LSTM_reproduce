@@ -51,6 +51,12 @@ OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 # Outlier removal threshold (percentile)
 OUTLIER_PERCENTILE = 90
 
+# Rolling profile parameters for HR/HRV line plots
+ROLLING_WINDOW_SEC = 3
+# Stride is defined in BVP samples to avoid mixing with "Hz" terminology.
+ROLLING_STRIDE_SAMPLES = 1
+ROLLING_BVP_STEP_SEC = ROLLING_STRIDE_SAMPLES / dmc.BVP_SAMPLING_RATE_HZ
+
 
 def make_task_label(task_id: str, group: str) -> str:
     """Generate combined task label for 5-class classification.
@@ -1237,7 +1243,12 @@ def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
-def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 30, step_sec: int = 1) -> tuple[np.ndarray, np.ndarray]:
+def calculate_rolling_rmssd(
+    bvp_signal: list[float],
+    fs: int,
+    window_sec: int = ROLLING_WINDOW_SEC,
+    step_sec: float = ROLLING_BVP_STEP_SEC,
+) -> tuple[np.ndarray, np.ndarray]:
     """Calculate rolling RMSSD from BVP signal.
 
     1. Cleans BVP signal and finds peaks.
@@ -1282,9 +1293,14 @@ def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 
     rr_intervals = np.asarray(rri_dict["RRI"], dtype=float)
     rr_times_ms = np.asarray(rri_dict["RRI_Time"], dtype=float) * 1000.0
 
-    # Rolling window
+    # Rolling window — only generate complete windows
+    # n = floor((duration - window) / step) + 1
     signal_duration_sec = len(bvp_signal) / fs
-    time_points = np.arange(0, signal_duration_sec, step_sec)
+    max_start = signal_duration_sec - window_sec
+    if max_start < 0:
+        return np.array([]), np.array([])
+    n_windows = int(np.floor(max_start / step_sec)) + 1
+    time_points = np.arange(n_windows) * step_sec
     rmssd_values = []
 
     window_ms = window_sec * 1000
@@ -1304,6 +1320,78 @@ def calculate_rolling_rmssd(bvp_signal: list[float], fs: int, window_sec: int = 
             rmssd_values.append(rmssd)
 
     return time_points, np.array(rmssd_values)
+
+
+def calculate_rolling_hr(
+    bvp_signal: list[float],
+    fs: int,
+    window_sec: int = ROLLING_WINDOW_SEC,
+    step_sec: float = ROLLING_BVP_STEP_SEC,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate rolling heart rate (bpm) from BVP signal.
+
+    1. Cleans BVP signal and finds peaks.
+    2. Fixes peaks (Kubios) and cleans RR intervals (250-1300ms, interpolate).
+    3. Computes HR in sliding windows.
+
+    Args:
+        bvp_signal: Raw BVP signal data.
+        fs: Sampling rate (Hz).
+        window_sec: Size of sliding window in seconds.
+        step_sec: Step size for sliding window in seconds.
+
+    Returns:
+        Tuple of (time_points, hr_values).
+    """
+    try:
+        cleaned = nk.ppg_clean(bvp_signal, sampling_rate=fs)
+        peaks_dict = nk.ppg_findpeaks(cleaned, sampling_rate=fs)
+        peaks = peaks_dict['PPG_Peaks']
+    except Exception:
+        return np.array([]), np.array([])
+
+    if len(peaks) < 5:
+        return np.array([]), np.array([])
+
+    rri_dict, _qc = clean_rr_intervals_from_peaks(
+        peaks,
+        fs,
+        interval_min_ms=250.0,
+        interval_max_ms=1300.0,
+        min_valid_ratio=0.8,
+        min_valid_intervals=10,
+        fixpeaks_method="Kubios",
+        iterative=True,
+    )
+    if rri_dict is None:
+        return np.array([]), np.array([])
+
+    rr_intervals = np.asarray(rri_dict["RRI"], dtype=float)
+    rr_times_ms = np.asarray(rri_dict["RRI_Time"], dtype=float) * 1000.0
+
+    # Only generate complete windows: n = floor((duration - window) / step) + 1
+    signal_duration_sec = len(bvp_signal) / fs
+    max_start = signal_duration_sec - window_sec
+    if max_start < 0:
+        return np.array([]), np.array([])
+    n_windows = int(np.floor(max_start / step_sec)) + 1
+    time_points = np.arange(n_windows) * step_sec
+    hr_values = []
+
+    window_ms = window_sec * 1000
+
+    for t_sec in time_points:
+        t_ms = t_sec * 1000
+        mask = (rr_times_ms >= t_ms) & (rr_times_ms < t_ms + window_ms)
+        window_rrs = rr_intervals[mask]
+
+        if len(window_rrs) < 2:
+            hr_values.append(np.nan)
+        else:
+            hr_bpm = np.nanmean(60000.0 / window_rrs)
+            hr_values.append(hr_bpm)
+
+    return time_points, np.array(hr_values)
 
 
 def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
@@ -1326,14 +1414,19 @@ def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray,
         bvp_data = dmc.read_bvp_data(bvp_path)
         duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
 
-        # Calculate rolling RMSSD (30s window)
+        # Calculate rolling RMSSD (10s window, 1Hz stride)
         times, rmssd = calculate_rolling_rmssd(
-            bvp_data, dmc.BVP_SAMPLING_RATE_HZ, window_sec=30, step_sec=1
+            bvp_data,
+            dmc.BVP_SAMPLING_RATE_HZ,
+            window_sec=ROLLING_WINDOW_SEC,
+            step_sec=ROLLING_BVP_STEP_SEC,
         )
 
         if len(times) == 0:
-            # Fallback for empty/failed processing
-            times = np.arange(0, duration, 1)
+            # Fallback for empty/failed processing (strict window count)
+            max_start_fb = duration - ROLLING_WINDOW_SEC
+            n_fb = max(int(np.floor(max_start_fb / ROLLING_BVP_STEP_SEC)) + 1, 0) if max_start_fb >= 0 else 0
+            times = np.arange(n_fb) * ROLLING_BVP_STEP_SEC
             rmssd = np.full(len(times), np.nan)
 
         # Shift times by current cumulative offset
@@ -1349,10 +1442,58 @@ def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray,
     return full_time, full_rmssd, boundaries
 
 
+def get_subject_hr_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Calculate concatenated rolling HR for a subject across T1-T3.
+
+    Returns:
+        Tuple of (full_time, full_hr, task_boundaries).
+    """
+    bvp_paths = dmc.list_bvp_paths(subject_path)
+    if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+        return np.array([]), np.array([]), []
+
+    all_times = []
+    all_hr = []
+    boundaries = []
+    current_offset = 0
+
+    # Process T1, T2, T3 in order
+    for bvp_path in bvp_paths:
+        bvp_data = dmc.read_bvp_data(bvp_path)
+        duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
+
+        # Calculate rolling HR (10s window, 1Hz stride)
+        times, hr = calculate_rolling_hr(
+            bvp_data,
+            dmc.BVP_SAMPLING_RATE_HZ,
+            window_sec=ROLLING_WINDOW_SEC,
+            step_sec=ROLLING_BVP_STEP_SEC,
+        )
+
+        if len(times) == 0:
+            # Fallback for empty/failed processing (strict window count)
+            max_start_fb = duration - ROLLING_WINDOW_SEC
+            n_fb = max(int(np.floor(max_start_fb / ROLLING_BVP_STEP_SEC)) + 1, 0) if max_start_fb >= 0 else 0
+            times = np.arange(n_fb) * ROLLING_BVP_STEP_SEC
+            hr = np.full(len(times), np.nan)
+
+        # Shift times by current cumulative offset
+        all_times.append(times + current_offset)
+        all_hr.append(hr)
+
+        current_offset += duration
+        boundaries.append(current_offset)
+
+    full_time = np.concatenate(all_times)
+    full_hr = np.concatenate(all_hr)
+
+    return full_time, full_hr, boundaries
+
+
 def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
     """Generate per-subject plots of rolling RMSSD across T1-T3.
 
-    Calculates RMSSD in a sliding window (30s) for each task and concatenates
+    Calculates RMSSD in a sliding window (10s) for each task and concatenates
     them on a single timeline to show HRV evolution.
 
     Args:
@@ -1376,7 +1517,17 @@ def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, st
         # Plot
         fig, ax = plt.subplots(figsize=(12, 6))
         
-        ax.plot(full_time, full_rmssd, color='#E91E63', linewidth=2, label='RMSSD (30s window)')
+        ax.plot(
+            full_time,
+            full_rmssd,
+            color='#E91E63',
+            linewidth=2,
+            label=(
+                f'RMSSD ({ROLLING_WINDOW_SEC}s window, '
+                f'stride={ROLLING_STRIDE_SAMPLES} sample '
+                f'({ROLLING_BVP_STEP_SEC:.5f}s))'
+            ),
+        )
 
         # Add vertical lines for task boundaries
         for b in boundaries[:-1]:
@@ -1403,6 +1554,82 @@ def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, st
         plt.close(fig)
 
     print(f"[INFO] Saved per-subject HRV profiles to {output_dir}")
+
+
+def plot_subject_rolling_hr(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
+    """Generate per-subject plots of rolling HR across T1-T3.
+
+    Calculates HR in a sliding window (10s) for each task and concatenates
+    them on a single timeline to show HR evolution.
+
+    Args:
+        dataset_path: Path to UBFC-Phys/Data folder.
+        subject_group_map: Mapping of {subject_id: group}.
+
+    Outputs:
+        Saves to data_mining/subject_hr_profiles/hr_profile_{subject_id}.jpg
+    """
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hr_profiles"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for subject_path in dmc.list_subject_paths(dataset_path):
+        subject_id = subject_path.name
+        group = subject_group_map.get(subject_id, 'unknown')
+
+        full_time, full_hr, boundaries = get_subject_hr_profile(subject_path)
+        if len(full_time) == 0:
+            continue
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(
+            full_time,
+            full_hr,
+            color='#1976D2',
+            linewidth=2,
+            label=(
+                f'HR ({ROLLING_WINDOW_SEC}s window, '
+                f'stride={ROLLING_STRIDE_SAMPLES} sample '
+                f'({ROLLING_BVP_STEP_SEC:.5f}s))'
+            ),
+        )
+
+        for b in boundaries[:-1]:
+            ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
+
+        segment_starts = [0] + boundaries[:-1]
+        segment_ends = boundaries
+        labels = ['T1', 'T2', 'T3']
+
+        y_lims = ax.get_ylim()
+        for start, end, lbl in zip(segment_starts, segment_ends, labels):
+            mid_point = (start + end) / 2
+            ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+        ax.set_xlabel('Time (s)', fontsize=12)
+        ax.set_ylabel('Heart Rate (bpm)', fontsize=12)
+        ax.set_title(f'Subject {subject_id} ({group}) - HR Profile', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+
+        out_path = output_dir / f"hr_profile_{subject_id}.jpg"
+        fig.savefig(out_path, dpi=100, bbox_inches='tight')
+        plt.close(fig)
+
+        # Save plotted HR curve data alongside JPG (one row per data point)
+        csv_path = out_path.with_suffix(".csv")
+        hr_curve_df = pd.DataFrame(
+            {
+                "subject": subject_id,
+                "group": group,
+                "data_point_idx": np.arange(len(full_time)),
+                "window_start_sec": full_time,
+                "window_end_sec": full_time + ROLLING_WINDOW_SEC,
+                "hr_bpm": full_hr,
+            }
+        )
+        hr_curve_df.to_csv(csv_path, index=False)
+
+    print(f"[INFO] Saved per-subject HR profiles to {output_dir}")
 
 
 def plot_group_rolling_hrv(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
@@ -1450,6 +1677,214 @@ def plot_group_rolling_hrv(subject_paths: list[Path], group_name: str, subject_g
     
     plt.tight_layout()
     out_path = output_dir / f"hrv_profile_{group_name}.jpg"
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {out_path}")
+
+
+def plot_group_rolling_hr(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
+    """Plot combined rolling HR profiles for a group of subjects.
+
+    Args:
+        subject_paths: List of subject paths to include in the plot.
+        group_name: Name of the group (used for filename and title).
+        subject_group_map: Mapping of {subject_id: group}.
+    """
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "group_hr_profiles"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    num_subjects = len(subject_paths)
+    if num_subjects <= 20:
+        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
+    else:
+        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
+
+    has_data = False
+    hr_curve_rows: list[pd.DataFrame] = []
+    for i, subject_path in enumerate(subject_paths):
+        subject_id = subject_path.name
+        subject_group = subject_group_map.get(subject_id, "unknown")
+        full_time, full_hr, _ = get_subject_hr_profile(subject_path)
+
+        if len(full_time) > 0:
+            has_data = True
+            ax.plot(full_time, full_hr, label=subject_id, color=colors[i], alpha=0.7, linewidth=1.5)
+            hr_curve_rows.append(
+                pd.DataFrame(
+                    {
+                        "group_name": group_name,
+                        "subject": subject_id,
+                        "group": subject_group,
+                        "data_point_idx": np.arange(len(full_time)),
+                        "window_start_sec": full_time,
+                        "window_end_sec": full_time + ROLLING_WINDOW_SEC,
+                        "hr_bpm": full_hr,
+                    }
+                )
+            )
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel('Time (s)', fontsize=12)
+    ax.set_ylabel('Heart Rate (bpm)', fontsize=12)
+    ax.set_title(f'Group HR Profile - {group_name}', fontsize=14, fontweight='bold')
+
+    if num_subjects <= 20:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
+
+    plt.tight_layout()
+    out_path = output_dir / f"hr_profile_{group_name}.jpg"
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {out_path}")
+
+    # Save plotted group HR curve data alongside JPG
+    if hr_curve_rows:
+        csv_path = out_path.with_suffix(".csv")
+        group_hr_curve_df = pd.concat(hr_curve_rows, ignore_index=True)
+        group_hr_curve_df.to_csv(csv_path, index=False)
+        print(f"[INFO] Saved {csv_path}")
+
+
+def get_subject_bvp_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Calculate concatenated cleaned BVP profile for a subject across T1-T3.
+
+    Returns:
+        Tuple of (full_time, full_bvp, task_boundaries).
+    """
+    bvp_paths = dmc.list_bvp_paths(subject_path)
+    if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+        return np.array([]), np.array([]), []
+
+    all_times = []
+    all_bvp = []
+    boundaries = []
+    current_offset = 0.0
+
+    # Process T1, T2, T3 in order
+    for bvp_path in bvp_paths:
+        bvp_data = np.asarray(dmc.read_bvp_data(bvp_path), dtype=float)
+        duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
+
+        # No windowing: use full cleaned BVP timeline directly
+        try:
+            bvp_clean = np.asarray(
+                nk.ppg_clean(bvp_data, sampling_rate=dmc.BVP_SAMPLING_RATE_HZ),
+                dtype=float
+            )
+        except Exception as e:
+            print(f"[WARN] {bvp_path}: ppg_clean failed ({e}). Using raw BVP.")
+            bvp_clean = bvp_data
+
+        times = np.arange(len(bvp_clean), dtype=float) / dmc.BVP_SAMPLING_RATE_HZ
+
+        # Shift times by current cumulative offset
+        all_times.append(times + current_offset)
+        all_bvp.append(bvp_clean)
+
+        current_offset += duration
+        boundaries.append(current_offset)
+
+    full_time = np.concatenate(all_times)
+    full_bvp = np.concatenate(all_bvp)
+    return full_time, full_bvp, boundaries
+
+
+def plot_subject_bvp_profile(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
+    """Generate per-subject plots of cleaned BVP across T1-T3.
+
+    Args:
+        dataset_path: Path to UBFC-Phys/Data folder.
+        subject_group_map: Mapping of {subject_id: group}.
+
+    Outputs:
+        Saves to data_mining/subject_bvp_profiles/bvp_profile_{subject_id}.jpg
+    """
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_bvp_profiles"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for subject_path in dmc.list_subject_paths(dataset_path):
+        subject_id = subject_path.name
+        group = subject_group_map.get(subject_id, 'unknown')
+
+        full_time, full_bvp, boundaries = get_subject_bvp_profile(subject_path)
+        if len(full_time) == 0:
+            continue
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(full_time, full_bvp, color='#7B1FA2', linewidth=1.2, label='Cleaned BVP')
+
+        for b in boundaries[:-1]:
+            ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
+
+        segment_starts = [0] + boundaries[:-1]
+        segment_ends = boundaries
+        labels = ['T1', 'T2', 'T3']
+
+        y_lims = ax.get_ylim()
+        for start, end, lbl in zip(segment_starts, segment_ends, labels):
+            mid_point = (start + end) / 2
+            ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+        ax.set_xlabel('Time (s)', fontsize=12)
+        ax.set_ylabel('BVP Amplitude', fontsize=12)
+        ax.set_title(f'Subject {subject_id} ({group}) - Cleaned BVP Profile', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+
+        out_path = output_dir / f"bvp_profile_{subject_id}.jpg"
+        fig.savefig(out_path, dpi=100, bbox_inches='tight')
+        plt.close(fig)
+
+    print(f"[INFO] Saved per-subject BVP profiles to {output_dir}")
+
+
+def plot_group_bvp_profile(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
+    """Plot combined cleaned BVP profiles for a group of subjects.
+
+    Args:
+        subject_paths: List of subject paths to include in the plot.
+        group_name: Name of the group (used for filename and title).
+        subject_group_map: Mapping of {subject_id: group}.
+    """
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "group_bvp_profiles"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    num_subjects = len(subject_paths)
+    if num_subjects <= 20:
+        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
+    else:
+        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
+
+    has_data = False
+    for i, subject_path in enumerate(subject_paths):
+        subject_id = subject_path.name
+        full_time, full_bvp, _ = get_subject_bvp_profile(subject_path)
+
+        if len(full_time) > 0:
+            has_data = True
+            ax.plot(full_time, full_bvp, label=subject_id, color=colors[i], alpha=0.55, linewidth=1.0)
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel('Time (s)', fontsize=12)
+    ax.set_ylabel('BVP Amplitude', fontsize=12)
+    ax.set_title(f'Group Cleaned BVP Profile - {group_name}', fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+
+    if num_subjects <= 20:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
+
+    plt.tight_layout()
+    out_path = output_dir / f"bvp_profile_{group_name}.jpg"
     fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved {out_path}")
@@ -1567,6 +2002,50 @@ if __name__ == "__main__":
 
     # All subjects
     plot_group_rolling_hrv(subject_paths, "All_Subjects", subject_group_map)
+
+    # Step 7d: Plot Subject HR Profile (Rolling HR)
+    print("[INFO] Generating per-subject HR profiles...")
+    plot_subject_rolling_hr(dataset_path, subject_group_map)
+
+    # Step 7e: Plot Group HR Profiles (Batched)
+    print("[INFO] Generating group HR profiles...")
+
+    # Batch of 8
+    for i in range(0, len(subject_paths), chunk_size_8):
+        group = subject_paths[i:i + chunk_size_8]
+        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
+        plot_group_rolling_hr(group, group_name, subject_group_map)
+
+    # Batch of 14
+    for i in range(0, len(subject_paths), chunk_size_14):
+        group = subject_paths[i:i + chunk_size_14]
+        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
+        plot_group_rolling_hr(group, group_name, subject_group_map)
+
+    # All subjects
+    plot_group_rolling_hr(subject_paths, "All_Subjects", subject_group_map)
+
+    # Step 7f: Plot Subject Raw BVP Profile
+    print("[INFO] Generating per-subject BVP profiles...")
+    plot_subject_bvp_profile(dataset_path, subject_group_map)
+
+    # Step 7g: Plot Group Raw BVP Profiles (Batched)
+    print("[INFO] Generating group BVP profiles...")
+
+    # Batch of 8
+    for i in range(0, len(subject_paths), chunk_size_8):
+        group = subject_paths[i:i + chunk_size_8]
+        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
+        plot_group_bvp_profile(group, group_name, subject_group_map)
+
+    # Batch of 14
+    for i in range(0, len(subject_paths), chunk_size_14):
+        group = subject_paths[i:i + chunk_size_14]
+        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
+        plot_group_bvp_profile(group, group_name, subject_group_map)
+
+    # All subjects
+    plot_group_bvp_profile(subject_paths, "All_Subjects", subject_group_map)
 
     # --- Sprint #2 (Not implemented yet) ---
     # Step 8: Clustering analysis
