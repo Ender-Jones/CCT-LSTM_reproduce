@@ -4,6 +4,7 @@
 # Generated visualization outputs
 /scripts/dataset_visualization/eda_results/
 /scripts/dataset_visualization/data_mining/
+/scripts/dataset_visualization/data_mining_smoke/
 
 # Project-specific ignores
 UBFC_data_path.txt

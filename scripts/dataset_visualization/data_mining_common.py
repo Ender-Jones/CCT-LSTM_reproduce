@@ -127,7 +127,9 @@ def list_subject_paths(dataset_path: Path) -> list[Path]:
     for entry in dataset_path.iterdir():
         if entry.is_dir() and entry.name.startswith("s"):
             subject_paths.append(entry)
-    return sorted(subject_paths, key=lambda p: p.name)
+
+    # Sort subject paths naturally by using integer conversion (e.g., s1, s2, ..., s56)
+    return sorted(subject_paths, key=lambda p: int(p.name[1:]) if p.name[1:].isdigit() else float('inf'))
 
 
 # =============================================================================

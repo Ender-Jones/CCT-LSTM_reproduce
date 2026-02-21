@@ -49,9 +49,8 @@ OUT_BOX_HR_MEDIAN = "box_task_vs_hr_median.jpg"
 OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 OUT_CSV_RPPG_PPG_CORRELATION = "rppg_vs_ppg_hr_correlation.csv"
-OUT_BOX_RPPG_PPG_PEARSON = "box_rppg_vs_ppg_pearson_r.jpg"
-OUT_BOX_RPPG_PPG_MAE = "box_rppg_vs_ppg_mae.jpg"
-OUT_BOX_RPPG_PPG_CCC = "box_rppg_vs_ppg_ccc.jpg"
+OUT_SCATTER_RPPG_PPG_PEARSON = "scatter_rppg_vs_ppg_pearson_r.jpg"
+OUT_SCATTER_RPPG_PPG_MAE = "scatter_rppg_vs_ppg_mae.jpg"
 
 # Outlier removal threshold (percentile)
 OUTLIER_PERCENTILE = 90
@@ -1849,44 +1848,28 @@ def plot_group_rolling_hr_rppg(subject_paths: list[Path], group_name: str, subje
     )
 
 
-def _concordance_correlation_coefficient(
-    y_true: np.ndarray, y_pred: np.ndarray
-) -> float:
-    """Lin's concordance correlation coefficient (CCC).
-
-    Measures agreement between two continuous variables, accounting for both
-    correlation and systematic bias.  CCC = 1 means perfect agreement.
-    """
-    mean_t, mean_p = np.mean(y_true), np.mean(y_pred)
-    var_t, var_p = np.var(y_true), np.var(y_pred)
-    covariance = np.mean((y_true - mean_t) * (y_pred - mean_p))
-    denom = var_t + var_p + (mean_t - mean_p) ** 2
-    if denom == 0:
-        return 0.0
-    return float(2 * covariance / denom)
-
-
 def analyze_rppg_vs_ppg_hr_correlation(
     subject_group_map: dict[str, str],
 ) -> None:
-    """Compute per-subject Pearson r, MAE and CCC between rPPG and PPG HR.
+    """Compute per-subject Pearson r and MAE between rPPG and PPG HR.
 
     Reads the pre-generated dense rPPG HR profile CSVs and PPG HR profile CSVs,
     aligns them by ``window_start_sec``, and computes agreement metrics for each
     subject.  Results are saved to a summary CSV (per-subject rows + overall
-    mean) and visualised as three group-wise box plots.
+    mean) and visualised as scatter correlation plots (X=rPPG HR, Y=PPG HR).
     """
-    rppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_rppg_hr_dense_profiles"
+    rppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_rppg_hr_profiles"
     ppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hr_profiles"
 
     if not rppg_dir.exists() or not ppg_dir.exists():
         print(
             "[WARN] rPPG or PPG HR profile directory not found. "
-            "Skipping rPPG-vs-PPG correlation analysis."
+            "[WARN] Skipping rPPG-vs-PPG correlation analysis."
         )
         return
 
     results: list[dict] = []
+    all_matched_rows: list[pd.DataFrame] = []
 
     for subject_id in sorted(subject_group_map.keys(), key=lambda s: int(s[1:])):
         group = subject_group_map[subject_id]
@@ -1921,16 +1904,18 @@ def analyze_rppg_vs_ppg_hr_correlation(
 
         r_val, _ = pearsonr(rppg_hr, ppg_hr)
         mae = float(np.mean(np.abs(rppg_hr - ppg_hr)))
-        ccc = _concordance_correlation_coefficient(ppg_hr, rppg_hr)
 
         results.append({
             "subject": subject_id,
             "group": group,
             "pearson_r": round(r_val, 6),
             "mae_bpm": round(mae, 4),
-            "ccc": round(ccc, 6),
             "n_matched_points": len(merged),
         })
+
+        merged["subject"] = subject_id
+        merged["group"] = group
+        all_matched_rows.append(merged)
 
     if not results:
         print("[WARN] No valid subjects for rPPG vs PPG correlation. Skipping.")
@@ -1943,7 +1928,6 @@ def analyze_rppg_vs_ppg_hr_correlation(
         "group": "",
         "pearson_r": round(results_df["pearson_r"].mean(), 6),
         "mae_bpm": round(results_df["mae_bpm"].mean(), 4),
-        "ccc": round(results_df["ccc"].mean(), 6),
         "n_matched_points": int(results_df["n_matched_points"].mean()),
     }])
     output_df = pd.concat([results_df, mean_row], ignore_index=True)
@@ -1953,58 +1937,133 @@ def analyze_rppg_vs_ppg_hr_correlation(
     output_df.to_csv(csv_path, index=False)
     print(f"[INFO] Saved rPPG vs PPG HR correlation → {csv_path}")
 
-    _plot_rppg_ppg_correlation_boxplots(results_df)
+    all_matched_df = pd.concat(all_matched_rows, ignore_index=True)
+    _plot_rppg_ppg_correlation_scatter(all_matched_df, results_df)
 
 
-def _plot_rppg_ppg_correlation_boxplots(results_df: pd.DataFrame) -> None:
-    """Draw one box plot per agreement metric (Pearson r, MAE, CCC)."""
+def _plot_rppg_ppg_correlation_scatter(
+    all_matched_df: pd.DataFrame,
+    results_df: pd.DataFrame,
+) -> None:
+    """Draw scatter correlation plots for rPPG HR vs PPG HR.
+
+    Creates two plots:
+    1. Pearson r scatter: regression line + identity line, annotated with r.
+    2. MAE scatter: identity line, annotated with MAE.
+
+    Args:
+        all_matched_df: DataFrame of all time-aligned (hr_bpm_rppg, hr_bpm_ppg,
+            subject, group) rows pooled across subjects.
+        results_df: Per-subject summary DataFrame (used for overall stats).
+    """
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    metric_configs: list[tuple[str, str, str, str]] = [
-        ("pearson_r", "Pearson r", "rPPG vs PPG HR — Pearson Correlation", OUT_BOX_RPPG_PPG_PEARSON),
-        ("mae_bpm", "MAE (bpm)", "rPPG vs PPG HR — Mean Absolute Error", OUT_BOX_RPPG_PPG_MAE),
-        ("ccc", "CCC", "rPPG vs PPG HR — Concordance Correlation", OUT_BOX_RPPG_PPG_CCC),
-    ]
 
     group_palette = {"ctrl": "#90CAF9", "test": "#EF9A9A"}
     group_order = ["ctrl", "test"]
 
-    for metric, y_label, title, filename in metric_configs:
-        fig, ax = plt.subplots(figsize=(8, 6))
+    rppg_hr = all_matched_df["hr_bpm_rppg"].values
+    ppg_hr = all_matched_df["hr_bpm_ppg"].values
 
-        sns.boxplot(
-            data=results_df,
-            x="group",
-            y=metric,
-            hue="group",
-            palette=group_palette,
-            order=group_order,
-            hue_order=group_order,
-            showfliers=False,
-            ax=ax,
-            legend=False,
-        )
-        sns.stripplot(
-            data=results_df,
-            x="group",
-            y=metric,
-            color="black",
-            order=group_order,
-            size=5,
-            alpha=0.4,
-            jitter=True,
-            ax=ax,
-        )
+    r_val, p_val = pearsonr(rppg_hr, ppg_hr)
+    mae = float(np.mean(np.abs(rppg_hr - ppg_hr)))
+    slope, intercept, _, _, _ = linregress(rppg_hr, ppg_hr)
 
-        ax.set_xlabel("Group", fontsize=12)
-        ax.set_ylabel(y_label, fontsize=12)
-        ax.set_title(title, fontsize=14, fontweight="bold")
-        plt.tight_layout()
+    all_hr = np.concatenate([rppg_hr, ppg_hr])
+    hr_min = float(np.nanmin(all_hr)) - 5
+    hr_max = float(np.nanmax(all_hr)) + 5
+    axis_range = np.array([hr_min, hr_max])
 
-        out_path = dmc.DATA_MINING_OUTPUT_DIR / filename
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"[INFO] Saved {out_path}")
+    # --- Plot 1: Pearson r scatter with regression line ---
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    for grp in group_order:
+        mask = all_matched_df["group"] == grp
+        if mask.any():
+            ax.scatter(
+                all_matched_df.loc[mask, "hr_bpm_rppg"],
+                all_matched_df.loc[mask, "hr_bpm_ppg"],
+                c=group_palette[grp],
+                label=grp,
+                s=8,
+                alpha=0.15,
+                edgecolors="none",
+            )
+
+    ax.plot(
+        axis_range, axis_range,
+        color="gray", linestyle="--", linewidth=1, alpha=0.6, label="y = x",
+    )
+    ax.plot(
+        axis_range, slope * axis_range + intercept,
+        color="#D32F2F", linewidth=2,
+        label=f"y = {slope:.2f}x + {intercept:.1f}",
+    )
+
+    p_text = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.4f}"
+    ax.text(
+        0.05, 0.95,
+        f"Pearson r = {r_val:.4f}\n{p_text}\nn = {len(rppg_hr):,}",
+        transform=ax.transAxes, fontsize=11, verticalalignment="top",
+        bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.9),
+    )
+
+    ax.set_xlabel("rPPG HR (bpm)", fontsize=12)
+    ax.set_ylabel("PPG HR (bpm)", fontsize=12)
+    ax.set_title("rPPG vs PPG HR — Pearson Correlation", fontsize=14, fontweight="bold")
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(axis_range)
+    ax.set_ylim(axis_range)
+    ax.legend(loc="lower right", fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    out_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_SCATTER_RPPG_PPG_PEARSON
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] Saved {out_path}")
+
+    # --- Plot 2: MAE scatter with identity line ---
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    for grp in group_order:
+        mask = all_matched_df["group"] == grp
+        if mask.any():
+            ax.scatter(
+                all_matched_df.loc[mask, "hr_bpm_rppg"],
+                all_matched_df.loc[mask, "hr_bpm_ppg"],
+                c=group_palette[grp],
+                label=grp,
+                s=8,
+                alpha=0.15,
+                edgecolors="none",
+            )
+
+    ax.plot(
+        axis_range, axis_range,
+        color="#D32F2F", linewidth=2, label="y = x (perfect agreement)",
+    )
+
+    ax.text(
+        0.05, 0.95,
+        f"MAE = {mae:.2f} bpm\nn = {len(rppg_hr):,}",
+        transform=ax.transAxes, fontsize=11, verticalalignment="top",
+        bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.9),
+    )
+
+    ax.set_xlabel("rPPG HR (bpm)", fontsize=12)
+    ax.set_ylabel("PPG HR (bpm)", fontsize=12)
+    ax.set_title("rPPG vs PPG HR — Mean Absolute Error", fontsize=14, fontweight="bold")
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlim(axis_range)
+    ax.set_ylim(axis_range)
+    ax.legend(loc="lower right", fontsize=10)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    out_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_SCATTER_RPPG_PPG_MAE
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO] Saved {out_path}")
 
 
 def cluster_features(merged_df: pd.DataFrame) -> pd.DataFrame:
@@ -2131,7 +2190,7 @@ if __name__ == "__main__":
     print("[INFO] Generating group rPPG HR profiles...")
     run_batched_group_plots(subject_paths, subject_group_map, plot_group_rolling_hr_rppg)
 
-    # Step 8: rPPG vs PPG HR agreement analysis (Pearson r, MAE, CCC)
+    # Step 8: rPPG vs PPG HR agreement analysis (Pearson r, MAE)
     print("[INFO] Analysing rPPG vs PPG HR correlation...")
     analyze_rppg_vs_ppg_hr_correlation(subject_group_map)
 
