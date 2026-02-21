@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import seaborn as sns
-from scipy.stats import linregress
+from scipy.stats import linregress, pearsonr
 
 import data_mining_common as dmc
 
@@ -48,9 +48,30 @@ OUT_BOX_RPPG_RMSSD = "box_task_vs_rppg_hrv_rmssd.jpg"
 OUT_BOX_HR_MEDIAN = "box_task_vs_hr_median.jpg"
 OUT_BOX_INTERACTION = "box_Tonic_slop_x_Phasic_std.jpg"
 OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
+OUT_CSV_RPPG_PPG_CORRELATION = "rppg_vs_ppg_hr_correlation.csv"
+OUT_BOX_RPPG_PPG_PEARSON = "box_rppg_vs_ppg_pearson_r.jpg"
+OUT_BOX_RPPG_PPG_MAE = "box_rppg_vs_ppg_mae.jpg"
+OUT_BOX_RPPG_PPG_CCC = "box_rppg_vs_ppg_ccc.jpg"
 
 # Outlier removal threshold (percentile)
 OUTLIER_PERCENTILE = 90
+
+# Shared plotting style for 5-class task labels
+TASK_PALETTE = {
+    'T1':      '#4CAF50',  # green - baseline
+    'T2-ctrl': '#90CAF9',  # light blue - easy task
+    'T2-test': '#1565C0',  # dark blue - hard task
+    'T3-ctrl': '#EF9A9A',  # light red - easy task
+    'T3-test': '#C62828',  # dark red - hard task
+}
+TASK_HUE_ORDER = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+TASK_MARKER_MAP = {
+    'T1':      'o',
+    'T2-ctrl': 'o',
+    'T2-test': '^',
+    'T3-ctrl': 'o',
+    'T3-test': '^',
+}
 
 # Rolling profile parameters for HR/HRV line plots
 ROLLING_WINDOW_SEC = 3
@@ -58,8 +79,8 @@ ROLLING_WINDOW_SEC = 3
 ROLLING_STRIDE_SAMPLES = 1
 ROLLING_BVP_STEP_SEC = ROLLING_STRIDE_SAMPLES / dmc.BVP_SAMPLING_RATE_HZ
 # Rolling profile export DPI
-ROLLING_SUBJECT_PLOT_DPI = 200
-ROLLING_GROUP_PLOT_DPI = 300
+ROLLING_SUBJECT_PLOT_DPI = 300
+ROLLING_GROUP_PLOT_DPI = 500
 
 
 def make_task_label(task_id: str, group: str) -> str:
@@ -523,6 +544,34 @@ def merge_eda_and_ppg_features(
     return merged_df
 
 
+def annotate_outliers(
+    fig: plt.Figure,
+    outliers: pd.DataFrame,
+    *,
+    threshold_text: str,
+    value_col: str,
+    value_format: str,
+) -> None:
+    """Render outlier details below a plot."""
+    if outliers.empty:
+        return
+
+    outlier_lines = [threshold_text]
+    for _, row in outliers.iterrows():
+        formatted_value = format(row[value_col], value_format)
+        outlier_lines.append(f"  {row['subject']} ({row['task_label']}): {formatted_value}")
+    outlier_text = "\n".join(outlier_lines)
+
+    fig.text(
+        0.12, -0.02,
+        outlier_text,
+        fontsize=9,
+        fontfamily='monospace',
+        verticalalignment='top',
+        bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFFDE7', edgecolor='#FFB300', alpha=0.9),
+    )
+
+
 def plot_scatter_tonic_vs_hr_hrv(merged_df: pd.DataFrame) -> None:
     """Plot scatter plots of EDA tonic mean vs HR/HRV metrics with 5-class coloring.
 
@@ -554,27 +603,6 @@ def plot_scatter_tonic_vs_hr_hrv(merged_df: pd.DataFrame) -> None:
 
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 5-class color palette: same hue family, different lightness for ctrl/test
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
-    # Marker mapping: ctrl=circle, test=triangle, T1=circle
-    marker_map = {
-        'T1':      'o',
-        'T2-ctrl': 'o',
-        'T2-test': '^',
-        'T3-ctrl': 'o',
-        'T3-test': '^',
-    }
-
-    # Legend order for logical grouping
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
     # Plot configs: (y_column, y_label, output_filename)
     plot_configs = [
         ('hr_mean', 'HR Mean (bpm)', OUT_SCATTER_TONIC_VS_HR),
@@ -597,10 +625,10 @@ def plot_scatter_tonic_vs_hr_hrv(merged_df: pd.DataFrame) -> None:
             y=y_col,
             hue='task_label',
             style='task_label',
-            palette=task_palette,
-            markers=marker_map,
-            hue_order=hue_order,
-            style_order=hue_order,
+            palette=TASK_PALETTE,
+            markers=TASK_MARKER_MAP,
+            hue_order=TASK_HUE_ORDER,
+            style_order=TASK_HUE_ORDER,
             s=100,
             alpha=0.75,
             edgecolor='white',
@@ -612,24 +640,13 @@ def plot_scatter_tonic_vs_hr_hrv(merged_df: pd.DataFrame) -> None:
         ax.set_title(f'EDA Tonic vs {y_label}', fontsize=14, fontweight='bold')
         ax.legend(title='Task-Group', bbox_to_anchor=(1.02, 1), loc='upper left')
 
-        # Add outlier annotation below the plot if any outliers exist
-        if not outliers.empty:
-            outlier_lines = [f"Outliers (>{OUTLIER_PERCENTILE}%ile, Y>{y_upper_limit:.0f}):"]
-            for _, row in outliers.iterrows():
-                outlier_lines.append(
-                    f"  {row['subject']} ({row['task_label']}): {row[y_col]:.1f}"
-                )
-            outlier_text = "\n".join(outlier_lines)
-
-            # Place annotation below the plot (outside axes)
-            fig.text(
-                0.12, -0.02,
-                outlier_text,
-                fontsize=9,
-                fontfamily='monospace',
-                verticalalignment='top',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFFDE7', edgecolor='#FFB300', alpha=0.9),
-            )
+        annotate_outliers(
+            fig,
+            outliers,
+            threshold_text=f"Outliers (>{OUTLIER_PERCENTILE}%ile, Y>{y_upper_limit:.0f}):",
+            value_col=y_col,
+            value_format=".1f",
+        )
 
         plt.tight_layout()
 
@@ -663,33 +680,21 @@ def plot_strip_phasic_by_task(merged_df: pd.DataFrame) -> None:
 
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 5-class color palette (same as scatter plots)
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
-    # Legend order for logical grouping
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
     x_upper_limit = merged_df['phasic_var'].quantile(OUTLIER_PERCENTILE / 100)
 
     # Split data into normal points and outliers
     plot_df = merged_df[merged_df['phasic_var'] <= x_upper_limit]
     outliers = merged_df[merged_df['phasic_var'] > x_upper_limit]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(24, 6))
     sns.stripplot(
         data=plot_df,
         x='phasic_var',
         y='task_label',
         hue='task_label',
-        palette=task_palette,
-        order=hue_order,
-        hue_order=hue_order,
+        palette=TASK_PALETTE,
+        order=TASK_HUE_ORDER,
+        hue_order=TASK_HUE_ORDER,
         size=8,
         alpha=0.7,
         jitter=0.25,
@@ -701,23 +706,13 @@ def plot_strip_phasic_by_task(merged_df: pd.DataFrame) -> None:
     ax.set_ylabel('Task-Group', fontsize=12)
     ax.set_title('EDA Phasic Variance Distribution by Task', fontsize=14, fontweight='bold')
 
-    # Add outlier annotation below the plot if any outliers exist
-    if not outliers.empty:
-        outlier_lines = [f"Outliers (>{OUTLIER_PERCENTILE}%ile, X>{x_upper_limit:.4f}):"]
-        for _, row in outliers.iterrows():
-            outlier_lines.append(
-                f"  {row['subject']} ({row['task_label']}): {row['phasic_var']:.4f}"
-            )
-        outlier_text = "\n".join(outlier_lines)
-
-        fig.text(
-            0.12, -0.02,
-            outlier_text,
-            fontsize=9,
-            fontfamily='monospace',
-            verticalalignment='top',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFFDE7', edgecolor='#FFB300', alpha=0.9),
-        )
+    annotate_outliers(
+        fig,
+        outliers,
+        threshold_text=f"Outliers (>{OUTLIER_PERCENTILE}%ile, X>{x_upper_limit:.4f}):",
+        value_col='phasic_var',
+        value_format=".4f",
+    )
 
     plt.tight_layout()
 
@@ -727,320 +722,134 @@ def plot_strip_phasic_by_task(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
-def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
-    """Plot box plot showing EDA phasic standard deviation distribution by task_label.
-
-    Creates a box plot with task_label on X-axis and phasic_std on Y-axis.
-    Includes individual data points as a strip plot overlay.
-    Excludes outliers above OUTLIER_PERCENTILE.
-
-    Args:
-        merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
-            'phasic_std' column.
-
-    Returns:
-        None.
-
-    Outputs:
-        Saves to DATA_MINING_OUTPUT_DIR:
-            - box_task_vs_phasic_std.jpg
-    """
-    if merged_df.empty or 'phasic_std' not in merged_df.columns:
-        print("[WARN] No phasic_std data available. Skipping box plot.")
+def plot_box_metric_by_task(
+    merged_df: pd.DataFrame,
+    *,
+    y_col: str,
+    y_label: str,
+    title: str,
+    output_filename: str,
+    missing_warn: str,
+    outlier_label: str,
+    filter_outliers: bool = True,
+    showfliers: bool = False,
+) -> None:
+    """Plot a generic task-wise box plot with strip overlay."""
+    if merged_df.empty or y_col not in merged_df.columns:
+        print(missing_warn)
         return
 
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Filter outliers
-    y_upper_limit = merged_df['phasic_std'].quantile(OUTLIER_PERCENTILE / 100)
-    filtered_df = merged_df[merged_df['phasic_std'] <= y_upper_limit].copy()
-    outlier_count = len(merged_df) - len(filtered_df)
-    if outlier_count > 0:
-        print(f"[INFO] Excluded {outlier_count} outliers (>{OUTLIER_PERCENTILE}th percentile, >{y_upper_limit:.2f}) for Phasic Std box plot.")
-
-    # 5-class color palette
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
+    plot_df = merged_df
+    if filter_outliers:
+        y_upper_limit = merged_df[y_col].quantile(OUTLIER_PERCENTILE / 100)
+        plot_df = merged_df[merged_df[y_col] <= y_upper_limit].copy()
+        outlier_count = len(merged_df) - len(plot_df)
+        if outlier_count > 0:
+            print(
+                f"[INFO] Excluded {outlier_count} outliers "
+                f"(>{OUTLIER_PERCENTILE}th percentile, >{y_upper_limit:.2f}) "
+                f"for {outlier_label} box plot."
+            )
 
     fig, ax = plt.subplots(figsize=(10, 7))
-    
-    # Box plot for distribution statistics
+
     sns.boxplot(
-        data=filtered_df,
+        data=plot_df,
         x='task_label',
         hue='task_label',
-        y='phasic_std',
-        palette=task_palette,
-        order=hue_order,
-        hue_order=hue_order,
-        showfliers=False,  # Hide outliers to avoid duplication with strip plot
+        y=y_col,
+        palette=TASK_PALETTE,
+        order=TASK_HUE_ORDER,
+        hue_order=TASK_HUE_ORDER,
+        showfliers=showfliers,
         ax=ax,
         legend=False,
     )
-    
-    # Strip plot overlay for individual points
+
     sns.stripplot(
-        data=filtered_df,
+        data=plot_df,
         x='task_label',
-        y='phasic_std',
+        y=y_col,
         color='black',
-        order=hue_order,
+        order=TASK_HUE_ORDER,
         size=4,
         alpha=0.3,
         jitter=True,
-        ax=ax
+        ax=ax,
     )
 
     ax.set_xlabel('Task-Group', fontsize=12)
-    ax.set_ylabel('EDA Phasic Standard Deviation (µS)', fontsize=12)
-    ax.set_title(f'EDA Phasic Std Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)', fontsize=14, fontweight='bold')
+    ax.set_ylabel(y_label, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight='bold')
 
     plt.tight_layout()
 
-    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_PHASIC_STD
+    output_path = dmc.DATA_MINING_OUTPUT_DIR / output_filename
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved {output_path}")
+
+
+def plot_box_phasic_std_by_task(merged_df: pd.DataFrame) -> None:
+    """Plot box plot showing EDA phasic standard deviation distribution by task_label."""
+    plot_box_metric_by_task(
+        merged_df,
+        y_col='phasic_std',
+        y_label='EDA Phasic Standard Deviation (µS)',
+        title=f'EDA Phasic Std Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)',
+        output_filename=OUT_BOX_PHASIC_STD,
+        missing_warn='[WARN] No phasic_std data available. Skipping box plot.',
+        outlier_label='Phasic Std',
+        filter_outliers=True,
+        showfliers=False,
+    )
 
 
 def plot_box_rmssd_by_task(merged_df: pd.DataFrame) -> None:
-    """Plot box plot showing HRV RMSSD distribution by task_label.
-
-    Creates a box plot with task_label on X-axis and hrv_rmssd on Y-axis.
-    Includes individual data points as a strip plot overlay.
-    Excludes outliers above OUTLIER_PERCENTILE.
-
-    Args:
-        merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
-            'hrv_rmssd' column.
-
-    Returns:
-        None.
-
-    Outputs:
-        Saves to DATA_MINING_OUTPUT_DIR:
-            - box_task_vs_hrv_rmssd.jpg
-    """
-    if merged_df.empty or 'hrv_rmssd' not in merged_df.columns:
-        print("[WARN] No hrv_rmssd data available. Skipping box plot.")
-        return
-
-    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Filter outliers
-    y_upper_limit = merged_df['hrv_rmssd'].quantile(OUTLIER_PERCENTILE / 100)
-    filtered_df = merged_df[merged_df['hrv_rmssd'] <= y_upper_limit].copy()
-    outlier_count = len(merged_df) - len(filtered_df)
-    if outlier_count > 0:
-        print(f"[INFO] Excluded {outlier_count} outliers (>{OUTLIER_PERCENTILE}th percentile, >{y_upper_limit:.2f}) for RMSSD box plot.")
-
-    # 5-class color palette
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-    
-    # Box plot for distribution statistics
-    sns.boxplot(
-        data=filtered_df,
-        x='task_label',
-        hue='task_label',
-        y='hrv_rmssd',
-        palette=task_palette,
-        order=hue_order,
-        hue_order=hue_order,
+    """Plot box plot showing HRV RMSSD distribution by task_label."""
+    plot_box_metric_by_task(
+        merged_df,
+        y_col='hrv_rmssd',
+        y_label='HRV RMSSD (ms)',
+        title=f'HRV RMSSD Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)',
+        output_filename=OUT_BOX_RMSSD,
+        missing_warn='[WARN] No hrv_rmssd data available. Skipping box plot.',
+        outlier_label='RMSSD',
+        filter_outliers=True,
         showfliers=False,
-        ax=ax,
-        legend=False,
     )
-    
-    # Strip plot overlay for individual points
-    sns.stripplot(
-        data=filtered_df,
-        x='task_label',
-        y='hrv_rmssd',
-        color='black',
-        order=hue_order,
-        size=4,
-        alpha=0.3,
-        jitter=True,
-        ax=ax
-    )
-
-    ax.set_xlabel('Task-Group', fontsize=12)
-    ax.set_ylabel('HRV RMSSD (ms)', fontsize=12)
-    ax.set_title(f'HRV RMSSD Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)', fontsize=14, fontweight='bold')
-
-    plt.tight_layout()
-
-    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_RMSSD
-    fig.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[INFO] Saved {output_path}")
 
 
 def plot_box_rppg_rmssd_by_task(merged_df: pd.DataFrame) -> None:
-    """Plot box plot showing rPPG HRV RMSSD distribution by task_label.
-
-    Creates a box plot with task_label on X-axis and rppg_hrv_rmssd on Y-axis.
-    Includes individual data points as a strip plot overlay.
-    Excludes outliers above OUTLIER_PERCENTILE.
-
-    Args:
-        merged_df: DataFrame from merge_eda_and_ppg_features(), must contain
-            'rppg_hrv_rmssd' column.
-
-    Returns:
-        None.
-
-    Outputs:
-        Saves to DATA_MINING_OUTPUT_DIR:
-            - box_task_vs_rppg_hrv_rmssd.jpg
-    """
-    if merged_df.empty or 'rppg_hrv_rmssd' not in merged_df.columns:
-        print("[WARN] No rppg_hrv_rmssd data available. Skipping box plot.")
-        return
-
-    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Filter outliers
-    y_upper_limit = merged_df['rppg_hrv_rmssd'].quantile(OUTLIER_PERCENTILE / 100)
-    filtered_df = merged_df[merged_df['rppg_hrv_rmssd'] <= y_upper_limit].copy()
-    outlier_count = len(merged_df) - len(filtered_df)
-    if outlier_count > 0:
-        print(
-            f"[INFO] Excluded {outlier_count} outliers (>{OUTLIER_PERCENTILE}th percentile, "
-            f">{y_upper_limit:.2f}) for rPPG RMSSD box plot."
-        )
-
-    # 5-class color palette
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    # Box plot for distribution statistics
-    sns.boxplot(
-        data=filtered_df,
-        x='task_label',
-        hue='task_label',
-        y='rppg_hrv_rmssd',
-        palette=task_palette,
-        order=hue_order,
-        hue_order=hue_order,
+    """Plot box plot showing rPPG HRV RMSSD distribution by task_label."""
+    plot_box_metric_by_task(
+        merged_df,
+        y_col='rppg_hrv_rmssd',
+        y_label='rPPG HRV RMSSD (ms)',
+        title=f'rPPG HRV RMSSD Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)',
+        output_filename=OUT_BOX_RPPG_RMSSD,
+        missing_warn='[WARN] No rppg_hrv_rmssd data available. Skipping box plot.',
+        outlier_label='rPPG RMSSD',
+        filter_outliers=True,
         showfliers=False,
-        ax=ax,
-        legend=False,
     )
-
-    # Strip plot overlay for individual points
-    sns.stripplot(
-        data=filtered_df,
-        x='task_label',
-        y='rppg_hrv_rmssd',
-        color='black',
-        order=hue_order,
-        size=4,
-        alpha=0.3,
-        jitter=True,
-        ax=ax
-    )
-
-    ax.set_xlabel('Task-Group', fontsize=12)
-    ax.set_ylabel('rPPG HRV RMSSD (ms)', fontsize=12)
-    ax.set_title(
-        f'rPPG HRV RMSSD Distribution by Task (Excl. top {100-OUTLIER_PERCENTILE}%)',
-        fontsize=14,
-        fontweight='bold'
-    )
-
-    plt.tight_layout()
-
-    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_RPPG_RMSSD
-    fig.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[INFO] Saved {output_path}")
 
 
 def plot_box_hr_median_by_task(merged_df: pd.DataFrame) -> None:
-    """Plot box plot of per-subject-task median heartbeat rate by task_label.
-
-    X-axis follows fixed order:
-        T1, T2-ctrl, T2-test, T3-ctrl, T3-test.
-    Y-axis is hr_median (median of beat-wise HR in bpm) for each subject-task pair.
-    """
-    if merged_df.empty or 'hr_median' not in merged_df.columns:
-        print("[WARN] No hr_median data available. Skipping HR median box plot.")
-        return
-
-    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    sns.boxplot(
-        data=merged_df,
-        x='task_label',
-        hue='task_label',
-        y='hr_median',
-        palette=task_palette,
-        order=hue_order,
-        hue_order=hue_order,
-        ax=ax,
-        legend=False,
+    """Plot box plot of per-subject-task median heartbeat rate by task_label."""
+    plot_box_metric_by_task(
+        merged_df,
+        y_col='hr_median',
+        y_label='Median Heart Rate (bpm)',
+        title='Median Heart Rate Distribution by Task',
+        output_filename=OUT_BOX_HR_MEDIAN,
+        missing_warn='[WARN] No hr_median data available. Skipping HR median box plot.',
+        outlier_label='HR median',
+        filter_outliers=False,
+        showfliers=True,
     )
-
-    sns.stripplot(
-        data=merged_df,
-        x='task_label',
-        y='hr_median',
-        color='black',
-        order=hue_order,
-        size=4,
-        alpha=0.3,
-        jitter=True,
-        ax=ax,
-    )
-
-    ax.set_xlabel('Task-Group', fontsize=12)
-    ax.set_ylabel('Median Heart Rate (bpm)', fontsize=12)
-    ax.set_title('Median Heart Rate Distribution by Task', fontsize=14, fontweight='bold')
-
-    plt.tight_layout()
-
-    output_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_BOX_HR_MEDIAN
-    fig.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[INFO] Saved {output_path}")
 
 
 def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
@@ -1068,17 +877,6 @@ def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
 
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 5-class color palette (same as other plots)
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
     # Plot configs: (y_column, y_label, output_filename)
     hrv_configs = [
         ('hrv_sdnn', 'HRV SDNN (ms)', OUT_STRIP_SDNN),
@@ -1103,9 +901,9 @@ def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
             x='task_label',
             y=y_col,
             hue='task_label',
-            palette=task_palette,
-            order=hue_order,
-            hue_order=hue_order,
+            palette=TASK_PALETTE,
+            order=TASK_HUE_ORDER,
+            hue_order=TASK_HUE_ORDER,
             size=8,
             alpha=0.7,
             jitter=0.25,
@@ -1117,23 +915,13 @@ def plot_strip_hrv_by_task(merged_df: pd.DataFrame) -> None:
         ax.set_ylabel(y_label, fontsize=12)
         ax.set_title(f'{y_label} Distribution by Task', fontsize=14, fontweight='bold')
 
-        # Add outlier annotation below the plot if any outliers exist
-        if not outliers.empty:
-            outlier_lines = [f"Outliers (>{OUTLIER_PERCENTILE}%ile, Y>{y_upper_limit:.0f}):"]
-            for _, row in outliers.iterrows():
-                outlier_lines.append(
-                    f"  {row['subject']} ({row['task_label']}): {row[y_col]:.1f}"
-                )
-            outlier_text = "\n".join(outlier_lines)
-
-            fig.text(
-                0.12, -0.02,
-                outlier_text,
-                fontsize=9,
-                fontfamily='monospace',
-                verticalalignment='top',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='#FFFDE7', edgecolor='#FFB300', alpha=0.9),
-            )
+        annotate_outliers(
+            fig,
+            outliers,
+            threshold_text=f"Outliers (>{OUTLIER_PERCENTILE}%ile, Y>{y_upper_limit:.0f}):",
+            value_col=y_col,
+            value_format=".1f",
+        )
 
         plt.tight_layout()
 
@@ -1171,17 +959,6 @@ def plot_box_interaction_feature(merged_df: pd.DataFrame) -> None:
     merged_df = merged_df.copy()
     merged_df['interaction_feature'] = merged_df['tonic_slope'] * merged_df['phasic_std']
 
-    # 5-class color palette
-    task_palette = {
-        'T1':      '#4CAF50',  # green
-        'T2-ctrl': '#90CAF9',  # light blue
-        'T2-test': '#1565C0',  # dark blue
-        'T3-ctrl': '#EF9A9A',  # light red
-        'T3-test': '#C62828',  # dark red
-    }
-
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
     fig, ax = plt.subplots(figsize=(10, 7))
 
     # Box plot
@@ -1190,9 +967,9 @@ def plot_box_interaction_feature(merged_df: pd.DataFrame) -> None:
         x='task_label',
         hue='task_label',
         y='interaction_feature',
-        palette=task_palette,
-        order=hue_order,
-        hue_order=hue_order,
+        palette=TASK_PALETTE,
+        order=TASK_HUE_ORDER,
+        hue_order=TASK_HUE_ORDER,
         showfliers=False,
         ax=ax,
         legend=False,
@@ -1204,7 +981,7 @@ def plot_box_interaction_feature(merged_df: pd.DataFrame) -> None:
         x='task_label',
         y='interaction_feature',
         color='black',
-        order=hue_order,
+        order=TASK_HUE_ORDER,
         size=4,
         alpha=0.3,
         jitter=True,
@@ -1254,15 +1031,6 @@ def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
 
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 5-class color palette (same as other plots)
-    task_palette = {
-        'T1':      '#4CAF50',  # green - baseline
-        'T2-ctrl': '#90CAF9',  # light blue - easy task
-        'T2-test': '#1565C0',  # dark blue - hard task
-        'T3-ctrl': '#EF9A9A',  # light red - easy task
-        'T3-test': '#C62828',  # dark red - hard task
-    }
-
     # Symbol mapping: ctrl=circle, test=diamond, T1=circle
     symbol_map = {
         'T1':      'circle',
@@ -1272,8 +1040,6 @@ def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
         'T3-test': 'diamond',
     }
 
-    hue_order = ['T1', 'T2-ctrl', 'T2-test', 'T3-ctrl', 'T3-test']
-
     fig = px.scatter_3d(
         merged_df,
         x='tonic_mean',
@@ -1281,9 +1047,9 @@ def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
         z='tonic_slope',
         color='task_label',
         symbol='task_label',
-        color_discrete_map=task_palette,
+        color_discrete_map=TASK_PALETTE,
         symbol_map=symbol_map,
-        category_orders={'task_label': hue_order},
+        category_orders={'task_label': TASK_HUE_ORDER},
         hover_data=['subject', 'task', 'group'],
         labels={
             'tonic_mean': 'Tonic Mean (µS)',
@@ -1310,6 +1076,49 @@ def plot_3d_eda_feature_space(merged_df: pd.DataFrame) -> None:
     print(f"[INFO] Saved {output_path}")
 
 
+def _prepare_rr_series_and_windows(
+    bvp_signal: list[float],
+    fs: int,
+    window_sec: int,
+    step_sec: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Prepare cleaned RR intervals and rolling window start points."""
+    try:
+        cleaned = nk.ppg_clean(bvp_signal, sampling_rate=fs)
+        peaks_dict = nk.ppg_findpeaks(cleaned, sampling_rate=fs)
+        peaks = peaks_dict['PPG_Peaks']
+    except Exception:
+        return np.array([]), np.array([]), np.array([])
+
+    if len(peaks) < 5:
+        return np.array([]), np.array([]), np.array([])
+
+    rri_dict, _qc = clean_rr_intervals_from_peaks(
+        peaks,
+        fs,
+        interval_min_ms=250.0,
+        interval_max_ms=1300.0,
+        min_valid_ratio=0.8,
+        min_valid_intervals=10,
+        fixpeaks_method="Kubios",
+        iterative=True,
+    )
+    if rri_dict is None:
+        return np.array([]), np.array([]), np.array([])
+
+    rr_intervals = np.asarray(rri_dict["RRI"], dtype=float)
+    rr_times_ms = np.asarray(rri_dict["RRI_Time"], dtype=float) * 1000.0
+
+    # Only generate complete windows: n = floor((duration - window) / step) + 1
+    signal_duration_sec = len(bvp_signal) / fs
+    max_start = signal_duration_sec - window_sec
+    if max_start < 0:
+        return np.array([]), np.array([]), np.array([])
+    n_windows = int(np.floor(max_start / step_sec)) + 1
+    time_points = np.arange(n_windows) * step_sec
+    return rr_intervals, rr_times_ms, time_points
+
+
 def calculate_rolling_rmssd(
     bvp_signal: list[float],
     fs: int,
@@ -1331,43 +1140,15 @@ def calculate_rolling_rmssd(
     Returns:
         Tuple of (time_points, rmssd_values).
     """
-    try:
-        # Clean signal and find peaks
-        cleaned = nk.ppg_clean(bvp_signal, sampling_rate=fs)
-        peaks_dict = nk.ppg_findpeaks(cleaned, sampling_rate=fs)
-        peaks = peaks_dict['PPG_Peaks']
-    except Exception as e:
-        # print(f"[DEBUG] Error processing BVP for rolling RMSSD: {e}")
-        return np.array([]), np.array([])
-
-    if len(peaks) < 5:
-        return np.array([]), np.array([])
-
-    rri_dict, _qc = clean_rr_intervals_from_peaks(
-        peaks,
+    rr_intervals, rr_times_ms, time_points = _prepare_rr_series_and_windows(
+        bvp_signal,
         fs,
-        interval_min_ms=250.0,
-        interval_max_ms=1300.0,
-        min_valid_ratio=0.8,
-        min_valid_intervals=10,
-        fixpeaks_method="Kubios",
-        iterative=True,
+        window_sec,
+        step_sec,
     )
-    if rri_dict is None:
+    if len(time_points) == 0:
         return np.array([]), np.array([])
 
-    # Cleaned NN intervals in ms + timestamps (s at end of interval)
-    rr_intervals = np.asarray(rri_dict["RRI"], dtype=float)
-    rr_times_ms = np.asarray(rri_dict["RRI_Time"], dtype=float) * 1000.0
-
-    # Rolling window — only generate complete windows
-    # n = floor((duration - window) / step) + 1
-    signal_duration_sec = len(bvp_signal) / fs
-    max_start = signal_duration_sec - window_sec
-    if max_start < 0:
-        return np.array([]), np.array([])
-    n_windows = int(np.floor(max_start / step_sec)) + 1
-    time_points = np.arange(n_windows) * step_sec
     rmssd_values = []
 
     window_ms = window_sec * 1000
@@ -1410,39 +1191,14 @@ def calculate_rolling_hr(
     Returns:
         Tuple of (time_points, hr_values).
     """
-    try:
-        cleaned = nk.ppg_clean(bvp_signal, sampling_rate=fs)
-        peaks_dict = nk.ppg_findpeaks(cleaned, sampling_rate=fs)
-        peaks = peaks_dict['PPG_Peaks']
-    except Exception:
-        return np.array([]), np.array([])
-
-    if len(peaks) < 5:
-        return np.array([]), np.array([])
-
-    rri_dict, _qc = clean_rr_intervals_from_peaks(
-        peaks,
+    rr_intervals, rr_times_ms, time_points = _prepare_rr_series_and_windows(
+        bvp_signal,
         fs,
-        interval_min_ms=250.0,
-        interval_max_ms=1300.0,
-        min_valid_ratio=0.8,
-        min_valid_intervals=10,
-        fixpeaks_method="Kubios",
-        iterative=True,
+        window_sec,
+        step_sec,
     )
-    if rri_dict is None:
+    if len(time_points) == 0:
         return np.array([]), np.array([])
-
-    rr_intervals = np.asarray(rri_dict["RRI"], dtype=float)
-    rr_times_ms = np.asarray(rri_dict["RRI_Time"], dtype=float) * 1000.0
-
-    # Only generate complete windows: n = floor((duration - window) / step) + 1
-    signal_duration_sec = len(bvp_signal) / fs
-    max_start = signal_duration_sec - window_sec
-    if max_start < 0:
-        return np.array([]), np.array([])
-    n_windows = int(np.floor(max_start / step_sec)) + 1
-    time_points = np.arange(n_windows) * step_sec
     hr_values = []
 
     window_ms = window_sec * 1000
@@ -1461,18 +1217,17 @@ def calculate_rolling_hr(
     return time_points, np.array(hr_values)
 
 
-def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
-    """Calculate concatenated rolling RMSSD for a subject across T1-T3.
-
-    Returns:
-        Tuple of (full_time, full_rmssd, task_boundaries).
-    """
+def _get_subject_rolling_profile(
+    subject_path: Path,
+    metric_fn,
+) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Calculate a concatenated rolling metric profile for a subject across T1-T3."""
     bvp_paths = dmc.list_bvp_paths(subject_path)
     if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
         return np.array([]), np.array([]), []
 
     all_times = []
-    all_rmssd = []
+    all_values = []
     boundaries = []
     current_offset = 0
 
@@ -1481,8 +1236,7 @@ def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray,
         bvp_data = dmc.read_bvp_data(bvp_path)
         duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
 
-        # Calculate rolling RMSSD (10s window, 1Hz stride)
-        times, rmssd = calculate_rolling_rmssd(
+        times, metric_values = metric_fn(
             bvp_data,
             dmc.BVP_SAMPLING_RATE_HZ,
             window_sec=ROLLING_WINDOW_SEC,
@@ -1494,67 +1248,357 @@ def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray,
             max_start_fb = duration - ROLLING_WINDOW_SEC
             n_fb = max(int(np.floor(max_start_fb / ROLLING_BVP_STEP_SEC)) + 1, 0) if max_start_fb >= 0 else 0
             times = np.arange(n_fb) * ROLLING_BVP_STEP_SEC
-            rmssd = np.full(len(times), np.nan)
+            metric_values = np.full(len(times), np.nan)
 
         # Shift times by current cumulative offset
         all_times.append(times + current_offset)
-        all_rmssd.append(rmssd)
+        all_values.append(metric_values)
 
         current_offset += duration
         boundaries.append(current_offset)
 
     full_time = np.concatenate(all_times)
-    full_rmssd = np.concatenate(all_rmssd)
+    full_values = np.concatenate(all_values)
+    return full_time, full_values, boundaries
 
-    return full_time, full_rmssd, boundaries
+
+def get_subject_hrv_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Calculate concatenated rolling RMSSD for a subject across T1-T3."""
+    return _get_subject_rolling_profile(subject_path, calculate_rolling_rmssd)
 
 
 def get_subject_hr_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
-    """Calculate concatenated rolling HR for a subject across T1-T3.
+    """Calculate concatenated rolling HR for a subject across T1-T3."""
+    return _get_subject_rolling_profile(subject_path, calculate_rolling_hr)
+
+
+def _reconstruct_rppg_bvp_overlap_average(
+    rppg_path: Path,
+) -> tuple[np.ndarray, int, float] | tuple[None, None, None]:
+    """Reconstruct a continuous BVP signal from overlapping rPPG windows via overlap-average.
+
+    Background
+    ----------
+    pyVHR extracts rPPG BVP using a sliding window over the video. For example,
+    a typical configuration is a 60-second window with a 5-second stride, which
+    means ~91% of the signal overlaps between consecutive windows.  The output
+    JSON stores each window as a separate ``bvp_signal`` array together with
+    ``start_frame`` / ``end_frame`` / ``fps`` metadata.
+
+    Naively concatenating these windows produces a signal ~8x longer than the
+    real video — which is wrong.  Naively picking only one window per stride
+    wastes most of the extracted information.
+
+    Algorithm (Overlap-Average)
+    ---------------------------
+    1. Determine the total timeline length in **samples** from the last window's
+       ``end_frame`` (all windows share the same ``fps``).
+    2. Allocate two float arrays of that length: ``sum_buf`` (accumulator) and
+       ``count_buf`` (per-sample contribution counter).
+    3. For each window, add its BVP samples into ``sum_buf`` at the correct
+       position (``start_frame``).  Increment ``count_buf`` at those positions.
+    4. Divide ``sum_buf / count_buf`` element-wise to get the overlap-averaged
+       BVP signal.  Positions with zero contributions stay as NaN.
+
+    This produces a single continuous BVP waveform at the original video fps,
+    with the same duration as the real video.  The dense signal can then be
+    processed identically to PPG BVP data (ppg_clean → peaks → rolling HR),
+    giving a comparable number of data points for visual comparison.
+
+    Args:
+        rppg_path: Path to a single rPPG JSON file (one task, e.g. vid_s1_T1_rppg.json).
 
     Returns:
-        Tuple of (full_time, full_hr, task_boundaries).
+        (bvp_signal, sampling_rate_int, task_duration_sec) on success.
+        (None, None, None) if the file cannot be processed.
     """
-    bvp_paths = dmc.list_bvp_paths(subject_path)
-    if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+    try:
+        with rppg_path.open("r", encoding="utf-8") as f:
+            rppg_data = json.load(f)
+    except Exception as e:
+        print(f"[WARN] {rppg_path}: Failed to read rPPG JSON: {e}. Skipping.")
+        return None, None, None
+
+    if not isinstance(rppg_data, list) or len(rppg_data) == 0:
+        return None, None, None
+
+    # First pass: determine consistent fps and total length
+    fs_int: int | None = None
+    total_samples = 0
+
+    for window in rppg_data:
+        if not isinstance(window, dict):
+            continue
+        fps = window.get('fps=sampling_rate', window.get('fps'))
+        end_frame = window.get('end_frame')
+        if fps is None or end_frame is None:
+            continue
+        fs = float(fps)
+        if not np.isfinite(fs) or fs <= 0:
+            continue
+        window_fs = int(round(fs))
+        if fs_int is None:
+            fs_int = window_fs
+        elif window_fs != fs_int:
+            continue
+        # end_frame is the last frame index; +1 for total sample count
+        total_samples = max(total_samples, int(end_frame) + 1)
+
+    if fs_int is None or total_samples == 0:
+        print(f"[WARN] {rppg_path}: No valid rPPG windows found. Skipping.")
+        return None, None, None
+
+    # Overlap-average accumulation
+    sum_buf = np.zeros(total_samples, dtype=np.float64)
+    count_buf = np.zeros(total_samples, dtype=np.float64)
+
+    for window in rppg_data:
+        if not isinstance(window, dict):
+            continue
+        bvp_signal = window.get('bvp_signal', [])
+        fps = window.get('fps=sampling_rate', window.get('fps'))
+        start_frame = window.get('start_frame')
+
+        if not bvp_signal or fps is None or start_frame is None:
+            continue
+        if int(round(float(fps))) != fs_int:
+            continue
+
+        sf = int(start_frame)
+        n = len(bvp_signal)
+        end_idx = min(sf + n, total_samples)
+        usable = end_idx - sf
+        if usable <= 0:
+            continue
+
+        arr = np.asarray(bvp_signal[:usable], dtype=np.float64)
+        sum_buf[sf:end_idx] += arr
+        count_buf[sf:end_idx] += 1.0
+
+    # Average where we have contributions; leave NaN where we don't
+    with np.errstate(invalid='ignore', divide='ignore'):
+        reconstructed = np.where(count_buf > 0, sum_buf / count_buf, np.nan)
+
+    task_duration_sec = total_samples / fs_int
+    return reconstructed, fs_int, task_duration_sec
+
+
+def get_subject_rppg_hr_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
+    """Calculate concatenated rolling HR from overlap-averaged rPPG BVP across T1-T3.
+
+    Uses _reconstruct_rppg_bvp_overlap_average to produce a dense continuous BVP
+    signal, then feeds it through calculate_rolling_hr (same pipeline as PPG).
+    """
+    rppg_paths = dmc.list_rppg_paths(subject_path)
+    if len(rppg_paths) != 3:
+        print(
+            f"[WARN] {subject_path}: expected 3 rPPG files (T1/T2/T3), got {len(rppg_paths)}. Skipping."
+        )
         return np.array([]), np.array([]), []
 
-    all_times = []
-    all_hr = []
-    boundaries = []
-    current_offset = 0
+    all_times: list[np.ndarray] = []
+    all_hr: list[np.ndarray] = []
+    boundaries: list[float] = []
+    current_offset = 0.0
 
-    # Process T1, T2, T3 in order
-    for bvp_path in bvp_paths:
-        bvp_data = dmc.read_bvp_data(bvp_path)
-        duration = len(bvp_data) / dmc.BVP_SAMPLING_RATE_HZ
+    for rppg_path in rppg_paths:
+        bvp_signal, fs_int, task_duration = _reconstruct_rppg_bvp_overlap_average(rppg_path)
+        if bvp_signal is None or fs_int is None or task_duration is None:
+            return np.array([]), np.array([]), []
 
-        # Calculate rolling HR (10s window, 1Hz stride)
         times, hr = calculate_rolling_hr(
-            bvp_data,
-            dmc.BVP_SAMPLING_RATE_HZ,
+            bvp_signal.tolist(),
+            fs_int,
             window_sec=ROLLING_WINDOW_SEC,
             step_sec=ROLLING_BVP_STEP_SEC,
         )
 
         if len(times) == 0:
-            # Fallback for empty/failed processing (strict window count)
-            max_start_fb = duration - ROLLING_WINDOW_SEC
+            max_start_fb = task_duration - ROLLING_WINDOW_SEC
             n_fb = max(int(np.floor(max_start_fb / ROLLING_BVP_STEP_SEC)) + 1, 0) if max_start_fb >= 0 else 0
             times = np.arange(n_fb) * ROLLING_BVP_STEP_SEC
             hr = np.full(len(times), np.nan)
 
-        # Shift times by current cumulative offset
         all_times.append(times + current_offset)
         all_hr.append(hr)
-
-        current_offset += duration
+        current_offset += task_duration
         boundaries.append(current_offset)
+
+    if not all_times:
+        return np.array([]), np.array([]), []
 
     full_time = np.concatenate(all_times)
     full_hr = np.concatenate(all_hr)
-
     return full_time, full_hr, boundaries
+
+
+def _add_task_boundary_annotations(ax: plt.Axes, boundaries: list[float]) -> None:
+    """Add vertical separators and T1/T2/T3 labels."""
+    for boundary in boundaries[:-1]:
+        ax.axvline(x=boundary, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
+
+    segment_starts = [0] + boundaries[:-1]
+    segment_ends = boundaries
+    labels = ['T1', 'T2', 'T3']
+
+    y_lims = ax.get_ylim()
+    for start, end, label in zip(segment_starts, segment_ends, labels):
+        mid_point = (start + end) / 2
+        ax.text(mid_point, y_lims[1], label, ha='center', va='bottom', fontweight='bold', fontsize=12)
+
+
+def _plot_subject_metric_profiles(
+    dataset_path: Path,
+    subject_group_map: dict[str, str],
+    *,
+    profile_fn,
+    output_subdir: str,
+    output_prefix: str,
+    line_color: str,
+    line_width: float,
+    legend_label: str,
+    y_label: str,
+    title_suffix: str,
+    save_csv: bool = False,
+    csv_value_col: str | None = None,
+) -> None:
+    """Generate per-subject profile plots using a shared pipeline."""
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / output_subdir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for subject_path in dmc.list_subject_paths(dataset_path):
+        subject_id = subject_path.name
+        group = subject_group_map.get(subject_id, 'unknown')
+
+        full_time, full_values, boundaries = profile_fn(subject_path)
+        if len(full_time) == 0:
+            continue
+
+        fig, ax = plt.subplots(figsize=(24, 6))
+        ax.plot(full_time, full_values, color=line_color, linewidth=line_width, label=legend_label)
+        _add_task_boundary_annotations(ax, boundaries)
+        ax.set_xlabel('Time (s)', fontsize=12)
+        ax.set_ylabel(y_label, fontsize=12)
+        ax.set_title(f'Subject {subject_id} ({group}) - {title_suffix}', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+
+        out_path = output_dir / f"{output_prefix}_{subject_id}.jpg"
+        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+
+        if save_csv and csv_value_col is not None:
+            csv_path = out_path.with_suffix(".csv")
+            profile_df = pd.DataFrame(
+                {
+                    "subject": subject_id,
+                    "group": group,
+                    "data_point_idx": np.arange(len(full_time)),
+                    "window_start_sec": full_time,
+                    "window_end_sec": full_time + ROLLING_WINDOW_SEC,
+                    csv_value_col: full_values,
+                }
+            )
+            profile_df.to_csv(csv_path, index=False)
+
+    print(f"[INFO] Saved per-subject profiles to {output_dir}")
+
+
+def _plot_group_metric_profiles(
+    subject_paths: list[Path],
+    group_name: str,
+    subject_group_map: dict[str, str],
+    *,
+    profile_fn,
+    output_subdir: str,
+    output_prefix: str,
+    y_label: str,
+    title_prefix: str,
+    line_alpha: float,
+    line_width: float,
+    enable_grid: bool = True,
+    save_csv: bool = False,
+    csv_value_col: str | None = None,
+) -> None:
+    """Generate grouped profile plots using a shared pipeline."""
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / output_subdir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    num_subjects = len(subject_paths)
+    colors = (
+        plt.cm.tab20(np.linspace(0, 1, num_subjects))
+        if num_subjects <= 20 else plt.cm.jet(np.linspace(0, 1, num_subjects))
+    )
+
+    has_data = False
+    curve_rows: list[pd.DataFrame] = []
+
+    for i, subject_path in enumerate(subject_paths):
+        subject_id = subject_path.name
+        subject_group = subject_group_map.get(subject_id, "unknown")
+        full_time, full_values, _ = profile_fn(subject_path)
+
+        if len(full_time) == 0:
+            continue
+
+        has_data = True
+        ax.plot(full_time, full_values, label=subject_id, color=colors[i], alpha=line_alpha, linewidth=line_width)
+
+        if save_csv and csv_value_col is not None:
+            curve_rows.append(
+                pd.DataFrame(
+                    {
+                        "group_name": group_name,
+                        "subject": subject_id,
+                        "group": subject_group,
+                        "data_point_idx": np.arange(len(full_time)),
+                        "window_start_sec": full_time,
+                        "window_end_sec": full_time + ROLLING_WINDOW_SEC,
+                        csv_value_col: full_values,
+                    }
+                )
+            )
+
+    if not has_data:
+        plt.close(fig)
+        return
+
+    ax.set_xlabel('Time (s)', fontsize=12)
+    ax.set_ylabel(y_label, fontsize=12)
+    ax.set_title(f'{title_prefix} - {group_name}', fontsize=14, fontweight='bold')
+    if enable_grid:
+        ax.grid(True, alpha=0.3)
+    if num_subjects <= 20:
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
+
+    plt.tight_layout()
+    out_path = output_dir / f"{output_prefix}_{group_name}.jpg"
+    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
+    plt.close(fig)
+    print(f"[INFO] Saved {out_path}")
+
+    if curve_rows:
+        csv_path = out_path.with_suffix(".csv")
+        group_curve_df = pd.concat(curve_rows, ignore_index=True)
+        group_curve_df.to_csv(csv_path, index=False)
+        print(f"[INFO] Saved {csv_path}")
+
+
+def run_batched_group_plots(
+    subject_paths: list[Path],
+    subject_group_map: dict[str, str],
+    plot_fn,
+    *,
+    chunk_sizes: tuple[int, ...] = (8, 14),
+) -> None:
+    """Run group plots for several batch sizes and all-subject view."""
+    for chunk_size in chunk_sizes:
+        for i in range(0, len(subject_paths), chunk_size):
+            group = subject_paths[i:i + chunk_size]
+            group_name = f"Group_{chunk_size}_Batch_{i // chunk_size + 1}"
+            plot_fn(group, group_name, subject_group_map)
+    plot_fn(subject_paths, "All_Subjects", subject_group_map)
 
 
 def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
@@ -1570,57 +1614,23 @@ def plot_subject_rolling_hrv(dataset_path: Path, subject_group_map: dict[str, st
     Outputs:
         Saves to data_mining/subject_hrv_profiles/hrv_profile_{subject_id}.jpg
     """
-    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hrv_profiles"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for subject_path in dmc.list_subject_paths(dataset_path):
-        subject_id = subject_path.name
-        group = subject_group_map.get(subject_id, 'unknown')
-        
-        full_time, full_rmssd, boundaries = get_subject_hrv_profile(subject_path)
-        if len(full_time) == 0:
-            continue
-
-        # Plot
-        fig, ax = plt.subplots(figsize=(12, 6))
-        
-        ax.plot(
-            full_time,
-            full_rmssd,
-            color='#E91E63',
-            linewidth=2,
-            label=(
-                f'RMSSD ({ROLLING_WINDOW_SEC}s window, '
-                f'stride={ROLLING_STRIDE_SAMPLES} sample '
-                f'({ROLLING_BVP_STEP_SEC:.5f}s))'
-            ),
-        )
-
-        # Add vertical lines for task boundaries
-        for b in boundaries[:-1]:
-            ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
-
-        # Add task labels centered in each segment
-        segment_starts = [0] + boundaries[:-1]
-        segment_ends = boundaries
-        labels = ['T1', 'T2', 'T3']
-        
-        y_lims = ax.get_ylim()
-        for start, end, lbl in zip(segment_starts, segment_ends, labels):
-            mid_point = (start + end) / 2
-            ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
-
-        ax.set_xlabel('Time (s)', fontsize=12)
-        ax.set_ylabel('HRV RMSSD (ms)', fontsize=12)
-        ax.set_title(f'Subject {subject_id} ({group}) - HRV RMSSD Profile', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right')
-
-        out_path = output_dir / f"hrv_profile_{subject_id}.jpg"
-        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
-        plt.close(fig)
-
-    print(f"[INFO] Saved per-subject HRV profiles to {output_dir}")
+    _plot_subject_metric_profiles(
+        dataset_path,
+        subject_group_map,
+        profile_fn=get_subject_hrv_profile,
+        output_subdir="subject_hrv_profiles",
+        output_prefix="hrv_profile",
+        line_color='#E91E63',
+        line_width=2.0,
+        legend_label=(
+            f'RMSSD ({ROLLING_WINDOW_SEC}s window, '
+            f'stride={ROLLING_STRIDE_SAMPLES} sample '
+            f'({ROLLING_BVP_STEP_SEC:.5f}s))'
+        ),
+        y_label='HRV RMSSD (ms)',
+        title_suffix='HRV RMSSD Profile',
+        save_csv=False,
+    )
 
 
 def plot_subject_rolling_hr(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
@@ -1636,67 +1646,24 @@ def plot_subject_rolling_hr(dataset_path: Path, subject_group_map: dict[str, str
     Outputs:
         Saves to data_mining/subject_hr_profiles/hr_profile_{subject_id}.jpg
     """
-    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hr_profiles"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for subject_path in dmc.list_subject_paths(dataset_path):
-        subject_id = subject_path.name
-        group = subject_group_map.get(subject_id, 'unknown')
-
-        full_time, full_hr, boundaries = get_subject_hr_profile(subject_path)
-        if len(full_time) == 0:
-            continue
-
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(
-            full_time,
-            full_hr,
-            color='#1976D2',
-            linewidth=2,
-            label=(
-                f'HR ({ROLLING_WINDOW_SEC}s window, '
-                f'stride={ROLLING_STRIDE_SAMPLES} sample '
-                f'({ROLLING_BVP_STEP_SEC:.5f}s))'
-            ),
-        )
-
-        for b in boundaries[:-1]:
-            ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
-
-        segment_starts = [0] + boundaries[:-1]
-        segment_ends = boundaries
-        labels = ['T1', 'T2', 'T3']
-
-        y_lims = ax.get_ylim()
-        for start, end, lbl in zip(segment_starts, segment_ends, labels):
-            mid_point = (start + end) / 2
-            ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
-
-        ax.set_xlabel('Time (s)', fontsize=12)
-        ax.set_ylabel('Heart Rate (bpm)', fontsize=12)
-        ax.set_title(f'Subject {subject_id} ({group}) - HR Profile', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right')
-
-        out_path = output_dir / f"hr_profile_{subject_id}.jpg"
-        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
-        plt.close(fig)
-
-        # Save plotted HR curve data alongside JPG (one row per data point)
-        csv_path = out_path.with_suffix(".csv")
-        hr_curve_df = pd.DataFrame(
-            {
-                "subject": subject_id,
-                "group": group,
-                "data_point_idx": np.arange(len(full_time)),
-                "window_start_sec": full_time,
-                "window_end_sec": full_time + ROLLING_WINDOW_SEC,
-                "hr_bpm": full_hr,
-            }
-        )
-        hr_curve_df.to_csv(csv_path, index=False)
-
-    print(f"[INFO] Saved per-subject HR profiles to {output_dir}")
+    _plot_subject_metric_profiles(
+        dataset_path,
+        subject_group_map,
+        profile_fn=get_subject_hr_profile,
+        output_subdir="subject_hr_profiles",
+        output_prefix="hr_profile",
+        line_color='#1976D2',
+        line_width=2.0,
+        legend_label=(
+            f'HR ({ROLLING_WINDOW_SEC}s window, '
+            f'stride={ROLLING_STRIDE_SAMPLES} sample '
+            f'({ROLLING_BVP_STEP_SEC:.5f}s))'
+        ),
+        y_label='Heart Rate (bpm)',
+        title_suffix='HR Profile',
+        save_csv=True,
+        csv_value_col='hr_bpm',
+    )
 
 
 def plot_group_rolling_hrv(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
@@ -1707,46 +1674,20 @@ def plot_group_rolling_hrv(subject_paths: list[Path], group_name: str, subject_g
         group_name: Name of the group (used for filename and title).
         subject_group_map: Mapping of {subject_id: group}.
     """
-    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "group_hrv_profiles"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    fig, ax = plt.subplots(figsize=(12, 7))
-    
-    # Use a colormap
-    num_subjects = len(subject_paths)
-    # Use tab20 if <= 20, else jet
-    if num_subjects <= 20:
-        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
-    else:
-        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
-
-    has_data = False
-    for i, subject_path in enumerate(subject_paths):
-        subject_id = subject_path.name
-        full_time, full_rmssd, _ = get_subject_hrv_profile(subject_path)
-        
-        if len(full_time) > 0:
-            has_data = True
-            ax.plot(full_time, full_rmssd, label=subject_id, color=colors[i], alpha=0.7, linewidth=1.5)
-
-    if not has_data:
-        plt.close(fig)
-        return
-
-    ax.set_xlabel('Time (s)', fontsize=12)
-    ax.set_ylabel('HRV RMSSD (ms)', fontsize=12)
-    ax.set_title(f'Group HRV RMSSD Profile - {group_name}', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-    
-    # Legend only if not too many subjects
-    if num_subjects <= 20:
-        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
-    
-    plt.tight_layout()
-    out_path = output_dir / f"hrv_profile_{group_name}.jpg"
-    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[INFO] Saved {out_path}")
+    _plot_group_metric_profiles(
+        subject_paths,
+        group_name,
+        subject_group_map,
+        profile_fn=get_subject_hrv_profile,
+        output_subdir="group_hrv_profiles",
+        output_prefix="hrv_profile",
+        y_label='HRV RMSSD (ms)',
+        title_prefix='Group HRV RMSSD Profile',
+        line_alpha=0.7,
+        line_width=1.5,
+        enable_grid=True,
+        save_csv=False,
+    )
 
 
 def plot_group_rolling_hr(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
@@ -1757,64 +1698,21 @@ def plot_group_rolling_hr(subject_paths: list[Path], group_name: str, subject_gr
         group_name: Name of the group (used for filename and title).
         subject_group_map: Mapping of {subject_id: group}.
     """
-    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "group_hr_profiles"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(12, 7))
-
-    num_subjects = len(subject_paths)
-    if num_subjects <= 20:
-        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
-    else:
-        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
-
-    has_data = False
-    hr_curve_rows: list[pd.DataFrame] = []
-    for i, subject_path in enumerate(subject_paths):
-        subject_id = subject_path.name
-        subject_group = subject_group_map.get(subject_id, "unknown")
-        full_time, full_hr, _ = get_subject_hr_profile(subject_path)
-
-        if len(full_time) > 0:
-            has_data = True
-            ax.plot(full_time, full_hr, label=subject_id, color=colors[i], alpha=0.7, linewidth=1.5)
-            hr_curve_rows.append(
-                pd.DataFrame(
-                    {
-                        "group_name": group_name,
-                        "subject": subject_id,
-                        "group": subject_group,
-                        "data_point_idx": np.arange(len(full_time)),
-                        "window_start_sec": full_time,
-                        "window_end_sec": full_time + ROLLING_WINDOW_SEC,
-                        "hr_bpm": full_hr,
-                    }
-                )
-            )
-
-    if not has_data:
-        plt.close(fig)
-        return
-
-    ax.set_xlabel('Time (s)', fontsize=12)
-    ax.set_ylabel('Heart Rate (bpm)', fontsize=12)
-    ax.set_title(f'Group HR Profile - {group_name}', fontsize=14, fontweight='bold')
-
-    if num_subjects <= 20:
-        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
-
-    plt.tight_layout()
-    out_path = output_dir / f"hr_profile_{group_name}.jpg"
-    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[INFO] Saved {out_path}")
-
-    # Save plotted group HR curve data alongside JPG
-    if hr_curve_rows:
-        csv_path = out_path.with_suffix(".csv")
-        group_hr_curve_df = pd.concat(hr_curve_rows, ignore_index=True)
-        group_hr_curve_df.to_csv(csv_path, index=False)
-        print(f"[INFO] Saved {csv_path}")
+    _plot_group_metric_profiles(
+        subject_paths,
+        group_name,
+        subject_group_map,
+        profile_fn=get_subject_hr_profile,
+        output_subdir="group_hr_profiles",
+        output_prefix="hr_profile",
+        y_label='Heart Rate (bpm)',
+        title_prefix='Group HR Profile',
+        line_alpha=0.7,
+        line_width=1.5,
+        enable_grid=False,
+        save_csv=True,
+        csv_value_col='hr_bpm',
+    )
 
 
 def get_subject_bvp_profile(subject_path: Path) -> tuple[np.ndarray, np.ndarray, list[float]]:
@@ -1871,43 +1769,19 @@ def plot_subject_bvp_profile(dataset_path: Path, subject_group_map: dict[str, st
     Outputs:
         Saves to data_mining/subject_bvp_profiles/bvp_profile_{subject_id}.jpg
     """
-    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_bvp_profiles"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for subject_path in dmc.list_subject_paths(dataset_path):
-        subject_id = subject_path.name
-        group = subject_group_map.get(subject_id, 'unknown')
-
-        full_time, full_bvp, boundaries = get_subject_bvp_profile(subject_path)
-        if len(full_time) == 0:
-            continue
-
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(full_time, full_bvp, color='#7B1FA2', linewidth=1.2, label='Cleaned BVP')
-
-        for b in boundaries[:-1]:
-            ax.axvline(x=b, color='black', linestyle='--', alpha=0.7, linewidth=1.5)
-
-        segment_starts = [0] + boundaries[:-1]
-        segment_ends = boundaries
-        labels = ['T1', 'T2', 'T3']
-
-        y_lims = ax.get_ylim()
-        for start, end, lbl in zip(segment_starts, segment_ends, labels):
-            mid_point = (start + end) / 2
-            ax.text(mid_point, y_lims[1], lbl, ha='center', va='bottom', fontweight='bold', fontsize=12)
-
-        ax.set_xlabel('Time (s)', fontsize=12)
-        ax.set_ylabel('BVP Amplitude', fontsize=12)
-        ax.set_title(f'Subject {subject_id} ({group}) - Cleaned BVP Profile', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right')
-
-        out_path = output_dir / f"bvp_profile_{subject_id}.jpg"
-        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches='tight')
-        plt.close(fig)
-
-    print(f"[INFO] Saved per-subject BVP profiles to {output_dir}")
+    _plot_subject_metric_profiles(
+        dataset_path,
+        subject_group_map,
+        profile_fn=get_subject_bvp_profile,
+        output_subdir="subject_bvp_profiles",
+        output_prefix="bvp_profile",
+        line_color='#7B1FA2',
+        line_width=1.2,
+        legend_label='Cleaned BVP',
+        y_label='BVP Amplitude',
+        title_suffix='Cleaned BVP Profile',
+        save_csv=False,
+    )
 
 
 def plot_group_bvp_profile(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
@@ -1918,43 +1792,219 @@ def plot_group_bvp_profile(subject_paths: list[Path], group_name: str, subject_g
         group_name: Name of the group (used for filename and title).
         subject_group_map: Mapping of {subject_id: group}.
     """
-    output_dir = dmc.DATA_MINING_OUTPUT_DIR / "group_bvp_profiles"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _plot_group_metric_profiles(
+        subject_paths,
+        group_name,
+        subject_group_map,
+        profile_fn=get_subject_bvp_profile,
+        output_subdir="group_bvp_profiles",
+        output_prefix="bvp_profile",
+        y_label='BVP Amplitude',
+        title_prefix='Group Cleaned BVP Profile',
+        line_alpha=0.55,
+        line_width=1.0,
+        enable_grid=True,
+        save_csv=False,
+    )
 
-    fig, ax = plt.subplots(figsize=(12, 7))
 
-    num_subjects = len(subject_paths)
-    if num_subjects <= 20:
-        colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
-    else:
-        colors = plt.cm.jet(np.linspace(0, 1, num_subjects))
+def plot_subject_rolling_hr_rppg(dataset_path: Path, subject_group_map: dict[str, str]) -> None:
+    """Generate per-subject rolling HR plots from overlap-averaged rPPG BVP."""
+    _plot_subject_metric_profiles(
+        dataset_path,
+        subject_group_map,
+        profile_fn=get_subject_rppg_hr_profile,
+        output_subdir="subject_rppg_hr_profiles",
+        output_prefix="rppg_hr_profile",
+        line_color='#00897B',
+        line_width=2.0,
+        legend_label=(
+            f'rPPG HR ({ROLLING_WINDOW_SEC}s window, '
+            f'stride={ROLLING_STRIDE_SAMPLES} sample '
+            f'({ROLLING_BVP_STEP_SEC:.5f}s))'
+        ),
+        y_label='Heart Rate (bpm)',
+        title_suffix='rPPG HR Profile (overlap-avg)',
+        save_csv=True,
+        csv_value_col='hr_bpm',
+    )
 
-    has_data = False
-    for i, subject_path in enumerate(subject_paths):
-        subject_id = subject_path.name
-        full_time, full_bvp, _ = get_subject_bvp_profile(subject_path)
 
-        if len(full_time) > 0:
-            has_data = True
-            ax.plot(full_time, full_bvp, label=subject_id, color=colors[i], alpha=0.55, linewidth=1.0)
+def plot_group_rolling_hr_rppg(subject_paths: list[Path], group_name: str, subject_group_map: dict[str, str]) -> None:
+    """Plot combined rolling rPPG-based HR profiles for a group of subjects."""
+    _plot_group_metric_profiles(
+        subject_paths,
+        group_name,
+        subject_group_map,
+        profile_fn=get_subject_rppg_hr_profile,
+        output_subdir="group_rppg_hr_profiles",
+        output_prefix="rppg_hr_profile",
+        y_label='Heart Rate (bpm)',
+        title_prefix='Group rPPG HR Profile',
+        line_alpha=0.7,
+        line_width=1.5,
+        enable_grid=False,
+        save_csv=True,
+        csv_value_col='hr_bpm',
+    )
 
-    if not has_data:
-        plt.close(fig)
+
+def _concordance_correlation_coefficient(
+    y_true: np.ndarray, y_pred: np.ndarray
+) -> float:
+    """Lin's concordance correlation coefficient (CCC).
+
+    Measures agreement between two continuous variables, accounting for both
+    correlation and systematic bias.  CCC = 1 means perfect agreement.
+    """
+    mean_t, mean_p = np.mean(y_true), np.mean(y_pred)
+    var_t, var_p = np.var(y_true), np.var(y_pred)
+    covariance = np.mean((y_true - mean_t) * (y_pred - mean_p))
+    denom = var_t + var_p + (mean_t - mean_p) ** 2
+    if denom == 0:
+        return 0.0
+    return float(2 * covariance / denom)
+
+
+def analyze_rppg_vs_ppg_hr_correlation(
+    subject_group_map: dict[str, str],
+) -> None:
+    """Compute per-subject Pearson r, MAE and CCC between rPPG and PPG HR.
+
+    Reads the pre-generated dense rPPG HR profile CSVs and PPG HR profile CSVs,
+    aligns them by ``window_start_sec``, and computes agreement metrics for each
+    subject.  Results are saved to a summary CSV (per-subject rows + overall
+    mean) and visualised as three group-wise box plots.
+    """
+    rppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_rppg_hr_dense_profiles"
+    ppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hr_profiles"
+
+    if not rppg_dir.exists() or not ppg_dir.exists():
+        print(
+            "[WARN] rPPG or PPG HR profile directory not found. "
+            "Skipping rPPG-vs-PPG correlation analysis."
+        )
         return
 
-    ax.set_xlabel('Time (s)', fontsize=12)
-    ax.set_ylabel('BVP Amplitude', fontsize=12)
-    ax.set_title(f'Group Cleaned BVP Profile - {group_name}', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
+    results: list[dict] = []
 
-    if num_subjects <= 20:
-        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', ncol=2, fontsize='small')
+    for subject_id in sorted(subject_group_map.keys(), key=lambda s: int(s[1:])):
+        group = subject_group_map[subject_id]
 
-    plt.tight_layout()
-    out_path = output_dir / f"bvp_profile_{group_name}.jpg"
-    fig.savefig(out_path, dpi=ROLLING_GROUP_PLOT_DPI, bbox_inches='tight')
-    plt.close(fig)
-    print(f"[INFO] Saved {out_path}")
+        rppg_csv = rppg_dir / f"rppg_hr_dense_profile_{subject_id}.csv"
+        ppg_csv = ppg_dir / f"hr_profile_{subject_id}.csv"
+
+        if not rppg_csv.exists() or not ppg_csv.exists():
+            print(f"[WARN] Missing CSV for {subject_id}. Skipping.")
+            continue
+
+        rppg_df = pd.read_csv(rppg_csv)
+        ppg_df = pd.read_csv(ppg_csv)
+
+        rppg_df["t_key"] = rppg_df["window_start_sec"].round(6)
+        ppg_df["t_key"] = ppg_df["window_start_sec"].round(6)
+
+        merged = pd.merge(
+            rppg_df[["t_key", "hr_bpm"]],
+            ppg_df[["t_key", "hr_bpm"]],
+            on="t_key",
+            suffixes=("_rppg", "_ppg"),
+        )
+        merged = merged.dropna(subset=["hr_bpm_rppg", "hr_bpm_ppg"])
+
+        if len(merged) < 10:
+            print(f"[WARN] {subject_id}: only {len(merged)} matched points. Skipping.")
+            continue
+
+        rppg_hr = merged["hr_bpm_rppg"].values
+        ppg_hr = merged["hr_bpm_ppg"].values
+
+        r_val, _ = pearsonr(rppg_hr, ppg_hr)
+        mae = float(np.mean(np.abs(rppg_hr - ppg_hr)))
+        ccc = _concordance_correlation_coefficient(ppg_hr, rppg_hr)
+
+        results.append({
+            "subject": subject_id,
+            "group": group,
+            "pearson_r": round(r_val, 6),
+            "mae_bpm": round(mae, 4),
+            "ccc": round(ccc, 6),
+            "n_matched_points": len(merged),
+        })
+
+    if not results:
+        print("[WARN] No valid subjects for rPPG vs PPG correlation. Skipping.")
+        return
+
+    results_df = pd.DataFrame(results)
+
+    mean_row = pd.DataFrame([{
+        "subject": "MEAN",
+        "group": "",
+        "pearson_r": round(results_df["pearson_r"].mean(), 6),
+        "mae_bpm": round(results_df["mae_bpm"].mean(), 4),
+        "ccc": round(results_df["ccc"].mean(), 6),
+        "n_matched_points": int(results_df["n_matched_points"].mean()),
+    }])
+    output_df = pd.concat([results_df, mean_row], ignore_index=True)
+
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_CSV_RPPG_PPG_CORRELATION
+    output_df.to_csv(csv_path, index=False)
+    print(f"[INFO] Saved rPPG vs PPG HR correlation → {csv_path}")
+
+    _plot_rppg_ppg_correlation_boxplots(results_df)
+
+
+def _plot_rppg_ppg_correlation_boxplots(results_df: pd.DataFrame) -> None:
+    """Draw one box plot per agreement metric (Pearson r, MAE, CCC)."""
+    dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    metric_configs: list[tuple[str, str, str, str]] = [
+        ("pearson_r", "Pearson r", "rPPG vs PPG HR — Pearson Correlation", OUT_BOX_RPPG_PPG_PEARSON),
+        ("mae_bpm", "MAE (bpm)", "rPPG vs PPG HR — Mean Absolute Error", OUT_BOX_RPPG_PPG_MAE),
+        ("ccc", "CCC", "rPPG vs PPG HR — Concordance Correlation", OUT_BOX_RPPG_PPG_CCC),
+    ]
+
+    group_palette = {"ctrl": "#90CAF9", "test": "#EF9A9A"}
+    group_order = ["ctrl", "test"]
+
+    for metric, y_label, title, filename in metric_configs:
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        sns.boxplot(
+            data=results_df,
+            x="group",
+            y=metric,
+            hue="group",
+            palette=group_palette,
+            order=group_order,
+            hue_order=group_order,
+            showfliers=False,
+            ax=ax,
+            legend=False,
+        )
+        sns.stripplot(
+            data=results_df,
+            x="group",
+            y=metric,
+            color="black",
+            order=group_order,
+            size=5,
+            alpha=0.4,
+            jitter=True,
+            ax=ax,
+        )
+
+        ax.set_xlabel("Group", fontsize=12)
+        ax.set_ylabel(y_label, fontsize=12)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        plt.tight_layout()
+
+        out_path = dmc.DATA_MINING_OUTPUT_DIR / filename
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"[INFO] Saved {out_path}")
 
 
 def cluster_features(merged_df: pd.DataFrame) -> pd.DataFrame:
@@ -2055,23 +2105,7 @@ if __name__ == "__main__":
     # Step 7c: Plot Group HRV Profiles (Batched)
     print("[INFO] Generating group HRV profiles...")
     subject_paths = dmc.list_subject_paths(dataset_path)
-    
-    # Batch of 8
-    chunk_size_8 = 8
-    for i in range(0, len(subject_paths), chunk_size_8):
-        group = subject_paths[i:i + chunk_size_8]
-        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
-        plot_group_rolling_hrv(group, group_name, subject_group_map)
-        
-    # Batch of 14
-    chunk_size_14 = 14
-    for i in range(0, len(subject_paths), chunk_size_14):
-        group = subject_paths[i:i + chunk_size_14]
-        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
-        plot_group_rolling_hrv(group, group_name, subject_group_map)
-
-    # All subjects
-    plot_group_rolling_hrv(subject_paths, "All_Subjects", subject_group_map)
+    run_batched_group_plots(subject_paths, subject_group_map, plot_group_rolling_hrv)
 
     # Step 7d: Plot Subject HR Profile (Rolling HR)
     print("[INFO] Generating per-subject HR profiles...")
@@ -2079,21 +2113,7 @@ if __name__ == "__main__":
 
     # Step 7e: Plot Group HR Profiles (Batched)
     print("[INFO] Generating group HR profiles...")
-
-    # Batch of 8
-    for i in range(0, len(subject_paths), chunk_size_8):
-        group = subject_paths[i:i + chunk_size_8]
-        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
-        plot_group_rolling_hr(group, group_name, subject_group_map)
-
-    # Batch of 14
-    for i in range(0, len(subject_paths), chunk_size_14):
-        group = subject_paths[i:i + chunk_size_14]
-        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
-        plot_group_rolling_hr(group, group_name, subject_group_map)
-
-    # All subjects
-    plot_group_rolling_hr(subject_paths, "All_Subjects", subject_group_map)
+    run_batched_group_plots(subject_paths, subject_group_map, plot_group_rolling_hr)
 
     # Step 7f: Plot Subject Raw BVP Profile
     print("[INFO] Generating per-subject BVP profiles...")
@@ -2101,24 +2121,22 @@ if __name__ == "__main__":
 
     # Step 7g: Plot Group Raw BVP Profiles (Batched)
     print("[INFO] Generating group BVP profiles...")
+    run_batched_group_plots(subject_paths, subject_group_map, plot_group_bvp_profile)
 
-    # Batch of 8
-    for i in range(0, len(subject_paths), chunk_size_8):
-        group = subject_paths[i:i + chunk_size_8]
-        group_name = f"Group_8_Batch_{i // chunk_size_8 + 1}"
-        plot_group_bvp_profile(group, group_name, subject_group_map)
+    # Step 7h: Plot Subject rPPG-based HR Profile (overlap-averaged, dense)
+    print("[INFO] Generating per-subject rPPG HR profiles...")
+    plot_subject_rolling_hr_rppg(dataset_path, subject_group_map)
 
-    # Batch of 14
-    for i in range(0, len(subject_paths), chunk_size_14):
-        group = subject_paths[i:i + chunk_size_14]
-        group_name = f"Group_14_Batch_{i // chunk_size_14 + 1}"
-        plot_group_bvp_profile(group, group_name, subject_group_map)
+    # Step 7i: Plot Group rPPG-based HR Profiles (Batched)
+    print("[INFO] Generating group rPPG HR profiles...")
+    run_batched_group_plots(subject_paths, subject_group_map, plot_group_rolling_hr_rppg)
 
-    # All subjects
-    plot_group_bvp_profile(subject_paths, "All_Subjects", subject_group_map)
+    # Step 8: rPPG vs PPG HR agreement analysis (Pearson r, MAE, CCC)
+    print("[INFO] Analysing rPPG vs PPG HR correlation...")
+    analyze_rppg_vs_ppg_hr_correlation(subject_group_map)
 
     # --- Sprint #2 (Not implemented yet) ---
-    # Step 8: Clustering analysis
+    # Step 9: Clustering analysis
     # clustered_df = cluster_features(merged_df)
-    # Step 9: Plot clustering results
+    # Step 10: Plot clustering results
     # plot_cluster_results(clustered_df)

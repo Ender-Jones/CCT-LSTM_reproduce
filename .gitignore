@@ -15,6 +15,7 @@ logs/
 *.pyc
 .specstory/
 /scripts/dataset_visualization/UBFC_path.txt
+/.cursor
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
