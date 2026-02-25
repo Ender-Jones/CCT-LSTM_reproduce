@@ -18,6 +18,7 @@ Output Directory: scripts/dataset_visualization/data_mining/
 """
 
 import json
+import shutil
 import warnings
 from pathlib import Path
 
@@ -27,6 +28,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import seaborn as sns
+from scipy.signal import correlate
 from scipy.stats import linregress, pearsonr
 
 import data_mining_common as dmc
@@ -80,6 +82,16 @@ ROLLING_BVP_STEP_SEC = ROLLING_STRIDE_SAMPLES / dmc.BVP_SAMPLING_RATE_HZ
 # Rolling profile export DPI
 ROLLING_SUBJECT_PLOT_DPI = 300
 ROLLING_GROUP_PLOT_DPI = 500
+
+
+def initialize_data_mining_output_dir() -> None:
+    """Reset data_mining output directory for a clean run."""
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+        print(f"[INFO] Cleared previous output directory: {output_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[INFO] Initialized output directory: {output_dir}")
 
 
 def make_task_label(task_id: str, group: str) -> str:
@@ -1848,87 +1860,201 @@ def plot_group_rolling_hr_rppg(subject_paths: list[Path], group_name: str, subje
     )
 
 
+def _find_optimal_lag_samples(
+    signal_a: np.ndarray,
+    signal_b: np.ndarray,
+    max_lag_samples: int,
+) -> int:
+    """Find the lag (in samples) that maximises cross-correlation.
+
+    Returns a signed integer *lag* such that ``signal_a[lag:]`` best aligns
+    with ``signal_b``.  Positive lag means *signal_a* leads (must be shifted
+    forward / trimmed from the front).
+
+    Only lags in [-max_lag_samples, +max_lag_samples] are considered.
+    Both signals are z-scored before correlation to avoid amplitude bias.
+    """
+    a = (signal_a - np.nanmean(signal_a)) / (np.nanstd(signal_a) + 1e-12)
+    b = (signal_b - np.nanmean(signal_b)) / (np.nanstd(signal_b) + 1e-12)
+
+    xcorr = correlate(a, b, mode="full")
+    mid = len(a) - 1
+    lo = max(mid - max_lag_samples, 0)
+    hi = min(mid + max_lag_samples + 1, len(xcorr))
+    best_idx = lo + int(np.argmax(xcorr[lo:hi]))
+    return best_idx - mid
+
+
 def analyze_rppg_vs_ppg_hr_correlation(
+    dataset_path: Path,
     subject_group_map: dict[str, str],
 ) -> None:
-    """Compute per-subject Pearson r and MAE between rPPG and PPG HR.
+    """Compute per-(subject, task) Pearson r and MAE between rPPG and PPG HR.
 
-    Reads the pre-generated dense rPPG HR profile CSVs and PPG HR profile CSVs,
-    aligns them by ``window_start_sec``, and computes agreement metrics for each
-    subject.  Results are saved to a summary CSV (per-subject rows + overall
-    mean) and visualised as scatter correlation plots (X=rPPG HR, Y=PPG HR).
+    Reads raw data files directly (bvp_sX_TY.csv + vid_sX_TY_rppg.json) and
+    processes each (subject, task) pair independently so that both PPG and rPPG
+    time series start at t=0.  This avoids the cumulative duration-drift bug
+    that occurs when T1/T2/T3 are concatenated into a single timeline.
     """
-    rppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_rppg_hr_profiles"
-    ppg_dir = dmc.DATA_MINING_OUTPUT_DIR / "subject_hr_profiles"
-
-    if not rppg_dir.exists() or not ppg_dir.exists():
-        print(
-            "[WARN] rPPG or PPG HR profile directory not found. "
-            "[WARN] Skipping rPPG-vs-PPG correlation analysis."
-        )
-        return
+    _TASK_LABELS = ["T1", "T2", "T3"]
 
     results: list[dict] = []
     all_matched_rows: list[pd.DataFrame] = []
 
     for subject_id in sorted(subject_group_map.keys(), key=lambda s: int(s[1:])):
         group = subject_group_map[subject_id]
+        subject_path = dataset_path / subject_id
 
-        rppg_csv = rppg_dir / f"rppg_hr_dense_profile_{subject_id}.csv"
-        ppg_csv = ppg_dir / f"hr_profile_{subject_id}.csv"
+        bvp_paths = dmc.list_bvp_paths(subject_path)
+        rppg_paths = dmc.list_rppg_paths(subject_path)
 
-        if not rppg_csv.exists() or not ppg_csv.exists():
-            print(f"[WARN] Missing CSV for {subject_id}. Skipping.")
+        if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+            continue
+        if len(rppg_paths) != 3:
+            print(
+                f"[WARN] {subject_id}: expected 3 rPPG files, "
+                f"got {len(rppg_paths)}. Skipping."
+            )
             continue
 
-        rppg_df = pd.read_csv(rppg_csv)
-        ppg_df = pd.read_csv(ppg_csv)
+        for task_label, bvp_path, rppg_path in zip(_TASK_LABELS, bvp_paths, rppg_paths):
+            # check task order
+            assert bvp_path.stem.split('_')[-1] == task_label, \
+                f"BVP path order mismatch: expected {task_label}, got {bvp_path.stem}"
+            assert rppg_path.stem.split('_')[-2] == task_label, \
+                f"rPPG path order mismatch: expected {task_label}, got {rppg_path.stem}"
+            # --- PPG HR (time starts at 0) ---
+            ppg_bvp = dmc.read_bvp_data(bvp_path)
+            ppg_times, ppg_hr = calculate_rolling_hr(
+                ppg_bvp,
+                dmc.BVP_SAMPLING_RATE_HZ,
+                window_sec=ROLLING_WINDOW_SEC,
+                step_sec=ROLLING_BVP_STEP_SEC,
+            )
 
-        rppg_df["t_key"] = rppg_df["window_start_sec"].round(6)
-        ppg_df["t_key"] = ppg_df["window_start_sec"].round(6)
+            # --- rPPG HR (time starts at 0) ---
+            rppg_bvp, rppg_fs, _ = _reconstruct_rppg_bvp_overlap_average(rppg_path)
+            if rppg_bvp is None or rppg_fs is None:
+                print(f"[WARN] {subject_id}/{task_label}: rPPG reconstruction failed. Skipping task.")
+                continue
 
-        merged = pd.merge(
-            rppg_df[["t_key", "hr_bpm"]],
-            ppg_df[["t_key", "hr_bpm"]],
-            on="t_key",
-            suffixes=("_rppg", "_ppg"),
-        )
-        merged = merged.dropna(subset=["hr_bpm_rppg", "hr_bpm_ppg"])
+            rppg_times, rppg_hr = calculate_rolling_hr(
+                rppg_bvp.tolist(),
+                rppg_fs,
+                window_sec=ROLLING_WINDOW_SEC,
+                step_sec=ROLLING_BVP_STEP_SEC,
+            )
 
-        if len(merged) < 10:
-            print(f"[WARN] {subject_id}: only {len(merged)} matched points. Skipping.")
-            continue
+            if len(ppg_times) == 0 or len(rppg_times) == 0:
+                print(f"[WARN] {subject_id}/{task_label}: empty HR series. Skipping task.")
+                continue
 
-        rppg_hr = merged["hr_bpm_rppg"].values
-        ppg_hr = merged["hr_bpm_ppg"].values
+            # --- Time-align via merge_asof (both start at 0) ---
+            rppg_df = pd.DataFrame({"window_start_sec": rppg_times, "hr_bpm": rppg_hr})
+            ppg_df = pd.DataFrame({"window_start_sec": ppg_times, "hr_bpm": ppg_hr})
+            rppg_df = rppg_df.sort_values("window_start_sec")
+            ppg_df = ppg_df.sort_values("window_start_sec")
 
-        r_val, _ = pearsonr(rppg_hr, ppg_hr)
-        mae = float(np.mean(np.abs(rppg_hr - ppg_hr)))
+            tolerance_sec = 0.5 / dmc.BVP_SAMPLING_RATE_HZ
 
-        results.append({
-            "subject": subject_id,
-            "group": group,
-            "pearson_r": round(r_val, 6),
-            "mae_bpm": round(mae, 4),
-            "n_matched_points": len(merged),
-        })
+            merged = pd.merge_asof(
+                rppg_df[["window_start_sec", "hr_bpm"]],
+                ppg_df[["window_start_sec", "hr_bpm"]],
+                on="window_start_sec",
+                tolerance=tolerance_sec,
+                direction="nearest",
+                suffixes=("_rppg", "_ppg"),
+            )
+            merged = merged.dropna(subset=["hr_bpm_rppg", "hr_bpm_ppg"])
 
-        merged["subject"] = subject_id
-        merged["group"] = group
-        all_matched_rows.append(merged)
+            if len(merged) < 10:
+                print(
+                    f"[WARN] {subject_id}/{task_label}: only {len(merged)} "
+                    f"matched points. Skipping task."
+                )
+                continue
+
+            rppg_vals = merged["hr_bpm_rppg"].values
+            ppg_vals = merged["hr_bpm_ppg"].values
+
+            rppg_points = int(rppg_df["hr_bpm"].notna().sum())
+            ppg_points = int(ppg_df["hr_bpm"].notna().sum())
+
+            # --- Raw (no lag compensation) ---
+            r_raw, _ = pearsonr(rppg_vals, ppg_vals)
+            mae_raw = float(np.mean(np.abs(rppg_vals - ppg_vals)))
+
+            # --- Lag compensation via cross-correlation (±2 s) ---
+            max_lag_sec = 2.0
+            step_sec = ROLLING_BVP_STEP_SEC
+            max_lag_samples = int(max_lag_sec / step_sec)
+
+            lag_samples = _find_optimal_lag_samples(rppg_vals, ppg_vals, max_lag_samples)
+            lag_sec = lag_samples * step_sec
+
+            if lag_samples > 0:
+                rppg_aligned = rppg_vals[lag_samples:]
+                ppg_aligned = ppg_vals[:len(rppg_aligned)]
+            elif lag_samples < 0:
+                ppg_aligned = ppg_vals[-lag_samples:]
+                rppg_aligned = rppg_vals[:len(ppg_aligned)]
+            else:
+                rppg_aligned = rppg_vals
+                ppg_aligned = ppg_vals
+
+            if len(rppg_aligned) >= 10:
+                r_comp, _ = pearsonr(rppg_aligned, ppg_aligned)
+                mae_comp = float(np.mean(np.abs(rppg_aligned - ppg_aligned)))
+            else:
+                r_comp = r_raw
+                mae_comp = mae_raw
+                lag_sec = 0.0
+
+            denominator = max(rppg_points, ppg_points)
+            match_rate = float((len(merged) / denominator) * 100.0) if denominator > 0 else 0.0
+
+            results.append({
+                "subject": subject_id,
+                "task": task_label,
+                "group": group,
+                "pearson_r_raw": round(r_raw, 6),
+                "mae_bpm_raw": round(mae_raw, 4),
+                "lag_sec": round(lag_sec, 4),
+                "pearson_r": round(r_comp, 6),
+                "mae_bpm": round(mae_comp, 4),
+                "rppg_points": rppg_points,
+                "ppg_points": ppg_points,
+                "n_matched_points": len(merged),
+                "match_rate_vs_larger_percent": round(match_rate, 2),
+            })
+
+            comp_df = pd.DataFrame({
+                "hr_bpm_rppg": rppg_aligned,
+                "hr_bpm_ppg": ppg_aligned,
+                "subject": subject_id,
+                "task": task_label,
+            })
+            all_matched_rows.append(comp_df)
 
     if not results:
-        print("[WARN] No valid subjects for rPPG vs PPG correlation. Skipping.")
+        print("[WARN] No valid (subject, task) pairs for rPPG vs PPG correlation. Skipping.")
         return
 
     results_df = pd.DataFrame(results)
 
     mean_row = pd.DataFrame([{
         "subject": "MEAN",
+        "task": "",
         "group": "",
+        "pearson_r_raw": round(results_df["pearson_r_raw"].mean(), 6),
+        "mae_bpm_raw": round(results_df["mae_bpm_raw"].mean(), 4),
+        "lag_sec": round(results_df["lag_sec"].mean(), 4),
         "pearson_r": round(results_df["pearson_r"].mean(), 6),
         "mae_bpm": round(results_df["mae_bpm"].mean(), 4),
+        "rppg_points": int(results_df["rppg_points"].mean()),
+        "ppg_points": int(results_df["ppg_points"].mean()),
         "n_matched_points": int(results_df["n_matched_points"].mean()),
+        "match_rate_vs_larger_percent": round(results_df["match_rate_vs_larger_percent"].mean(), 2),
     }])
     output_df = pd.concat([results_df, mean_row], ignore_index=True)
 
@@ -1951,15 +2077,17 @@ def _plot_rppg_ppg_correlation_scatter(
     1. Pearson r scatter: regression line + identity line, annotated with r.
     2. MAE scatter: identity line, annotated with MAE.
 
+    Points are coloured by task (T1/T2/T3).
+
     Args:
         all_matched_df: DataFrame of all time-aligned (hr_bpm_rppg, hr_bpm_ppg,
-            subject, group) rows pooled across subjects.
-        results_df: Per-subject summary DataFrame (used for overall stats).
+            subject, task) rows pooled across (subject, task) pairs.
+        results_df: Per-(subject, task) summary DataFrame (used for overall stats).
     """
     dmc.DATA_MINING_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    group_palette = {"ctrl": "#90CAF9", "test": "#EF9A9A"}
-    group_order = ["ctrl", "test"]
+    task_palette = {"T1": "#4CAF50", "T2": "#1565C0", "T3": "#C62828"}
+    task_order = ["T1", "T2", "T3"]
 
     rppg_hr = all_matched_df["hr_bpm_rppg"].values
     ppg_hr = all_matched_df["hr_bpm_ppg"].values
@@ -1973,17 +2101,19 @@ def _plot_rppg_ppg_correlation_scatter(
     hr_max = float(np.nanmax(all_hr)) + 5
     axis_range = np.array([hr_min, hr_max])
 
-    # --- Plot 1: Pearson r scatter with regression line ---
-    fig, ax = plt.subplots(figsize=(8, 8))
+    mean_lag = results_df["lag_sec"].mean() if "lag_sec" in results_df.columns else 0.0
 
-    for grp in group_order:
-        mask = all_matched_df["group"] == grp
+    # --- Plot 1: Pearson r scatter with regression line ---
+    fig, ax = plt.subplots(figsize=(20, 20))
+
+    for task in task_order:
+        mask = all_matched_df["task"] == task
         if mask.any():
             ax.scatter(
                 all_matched_df.loc[mask, "hr_bpm_rppg"],
                 all_matched_df.loc[mask, "hr_bpm_ppg"],
-                c=group_palette[grp],
-                label=grp,
+                c=task_palette[task],
+                label=task,
                 s=8,
                 alpha=0.15,
                 edgecolors="none",
@@ -2002,14 +2132,15 @@ def _plot_rppg_ppg_correlation_scatter(
     p_text = "p < 0.001" if p_val < 0.001 else f"p = {p_val:.4f}"
     ax.text(
         0.05, 0.95,
-        f"Pearson r = {r_val:.4f}\n{p_text}\nn = {len(rppg_hr):,}",
+        f"Pearson r = {r_val:.4f}  (lag-compensated)\n{p_text}\n"
+        f"n = {len(rppg_hr):,}  |  mean lag = {mean_lag:.2f}s",
         transform=ax.transAxes, fontsize=11, verticalalignment="top",
         bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.9),
     )
 
     ax.set_xlabel("rPPG HR (bpm)", fontsize=12)
     ax.set_ylabel("PPG HR (bpm)", fontsize=12)
-    ax.set_title("rPPG vs PPG HR — Pearson Correlation", fontsize=14, fontweight="bold")
+    ax.set_title("rPPG vs PPG HR — Pearson Correlation (lag-compensated)", fontsize=14, fontweight="bold")
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlim(axis_range)
     ax.set_ylim(axis_range)
@@ -2025,14 +2156,14 @@ def _plot_rppg_ppg_correlation_scatter(
     # --- Plot 2: MAE scatter with identity line ---
     fig, ax = plt.subplots(figsize=(8, 8))
 
-    for grp in group_order:
-        mask = all_matched_df["group"] == grp
+    for task in task_order:
+        mask = all_matched_df["task"] == task
         if mask.any():
             ax.scatter(
                 all_matched_df.loc[mask, "hr_bpm_rppg"],
                 all_matched_df.loc[mask, "hr_bpm_ppg"],
-                c=group_palette[grp],
-                label=grp,
+                c=task_palette[task],
+                label=task,
                 s=8,
                 alpha=0.15,
                 edgecolors="none",
@@ -2045,14 +2176,15 @@ def _plot_rppg_ppg_correlation_scatter(
 
     ax.text(
         0.05, 0.95,
-        f"MAE = {mae:.2f} bpm\nn = {len(rppg_hr):,}",
+        f"MAE = {mae:.2f} bpm  (lag-compensated)\n"
+        f"n = {len(rppg_hr):,}  |  mean lag = {mean_lag:.2f}s",
         transform=ax.transAxes, fontsize=11, verticalalignment="top",
         bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.9),
     )
 
     ax.set_xlabel("rPPG HR (bpm)", fontsize=12)
     ax.set_ylabel("PPG HR (bpm)", fontsize=12)
-    ax.set_title("rPPG vs PPG HR — Mean Absolute Error", fontsize=14, fontweight="bold")
+    ax.set_title("rPPG vs PPG HR — Mean Absolute Error (lag-compensated)", fontsize=14, fontweight="bold")
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlim(axis_range)
     ax.set_ylim(axis_range)
@@ -2061,7 +2193,7 @@ def _plot_rppg_ppg_correlation_scatter(
     plt.tight_layout()
 
     out_path = dmc.DATA_MINING_OUTPUT_DIR / OUT_SCATTER_RPPG_PPG_MAE
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"[INFO] Saved {out_path}")
 
@@ -2117,6 +2249,7 @@ if __name__ == "__main__":
     # Step 0: Read dataset path and manifest (read once, pass to functions)
     dataset_path = dmc.read_pathfile_or_ask_for_path()
     subject_group_map = dmc.read_master_manifest(dataset_path)
+    initialize_data_mining_output_dir()
 
     # Step 1: Extract EDA features for all (subject, task) pairs
     eda_features = extract_eda_features(dataset_path, subject_group_map)
@@ -2192,7 +2325,7 @@ if __name__ == "__main__":
 
     # Step 8: rPPG vs PPG HR agreement analysis (Pearson r, MAE)
     print("[INFO] Analysing rPPG vs PPG HR correlation...")
-    analyze_rppg_vs_ppg_hr_correlation(subject_group_map)
+    analyze_rppg_vs_ppg_hr_correlation(dataset_path, subject_group_map)
 
     # --- Sprint #2 (Not implemented yet) ---
     # Step 9: Clustering analysis

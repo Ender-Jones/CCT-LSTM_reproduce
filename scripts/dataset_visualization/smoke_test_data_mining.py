@@ -148,7 +148,7 @@ def run_pipeline_on_subset(smoke_data_dir: Path, smoke_manifest: dict[str, str])
     dm.plot_subject_rolling_hr_rppg(smoke_data_dir, smoke_manifest)
     dm.run_batched_group_plots(subject_paths, smoke_manifest, dm.plot_group_rolling_hr_rppg)
 
-    dm.analyze_rppg_vs_ppg_hr_correlation(smoke_manifest)
+    dm.analyze_rppg_vs_ppg_hr_correlation(smoke_data_dir, smoke_manifest)
 
     return {
         "eda_records": len(eda_features),
