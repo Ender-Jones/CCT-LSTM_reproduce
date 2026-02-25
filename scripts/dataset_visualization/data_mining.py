@@ -53,6 +53,7 @@ OUT_3D_EDA = "scatter3d_tonic_phasic_slope.html"
 OUT_CSV_RPPG_PPG_CORRELATION = "rppg_vs_ppg_hr_correlation.csv"
 OUT_SCATTER_RPPG_PPG_PEARSON = "scatter_rppg_vs_ppg_pearson_r.jpg"
 OUT_SCATTER_RPPG_PPG_MAE = "scatter_rppg_vs_ppg_mae.jpg"
+OUT_DIR_RPPG_PPG_HR_OVERLAY = "subject_rppg_ppg_hr_overlay"
 
 # Outlier removal threshold (percentile)
 OUTLIER_PERCENTILE = 90
@@ -2198,6 +2199,163 @@ def _plot_rppg_ppg_correlation_scatter(
     print(f"[INFO] Saved {out_path}")
 
 
+def plot_subject_rppg_ppg_hr_overlay(
+    dataset_path: Path,
+    subject_group_map: dict[str, str],
+) -> None:
+    """Generate per-subject diagnostic overlay of PPG HR vs rPPG HR.
+
+    For each subject, creates a figure with 3 row-subplots (T1, T2, T3).
+    Each subplot overlays three lines (all time-axes start at 0):
+        - PPG HR (ground truth, blue solid)
+        - rPPG HR raw (green dashed)
+        - rPPG HR lag-compensated (orange dash-dot)
+
+    Each task is processed independently from raw data to avoid cumulative
+    timestamp drift.  Per-task Pearson r / MAE / lag are annotated.
+    """
+    _TASK_LABELS = ["T1", "T2", "T3"]
+    output_dir = dmc.DATA_MINING_OUTPUT_DIR / OUT_DIR_RPPG_PPG_HR_OVERLAY
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for subject_path in dmc.list_subject_paths(dataset_path):
+        subject_id = subject_path.name
+        group = subject_group_map.get(subject_id, "unknown")
+
+        bvp_paths = dmc.list_bvp_paths(subject_path)
+        rppg_paths = dmc.list_rppg_paths(subject_path)
+
+        if not dmc.has_expected_bvp_files(bvp_paths, subject_path):
+            continue
+        if len(rppg_paths) != 3:
+            continue
+
+        fig, axes = plt.subplots(3, 1, figsize=(24, 18), sharex=False)
+
+        for idx, (task_label, bvp_path, rppg_path) in enumerate(
+            zip(_TASK_LABELS, bvp_paths, rppg_paths)
+        ):
+            ax = axes[idx]
+
+            # --- PPG HR ---
+            ppg_bvp = dmc.read_bvp_data(bvp_path)
+            ppg_times, ppg_hr = calculate_rolling_hr(
+                ppg_bvp, dmc.BVP_SAMPLING_RATE_HZ,
+                window_sec=ROLLING_WINDOW_SEC, step_sec=ROLLING_BVP_STEP_SEC,
+            )
+
+            # --- rPPG HR ---
+            rppg_bvp, rppg_fs, _ = _reconstruct_rppg_bvp_overlap_average(rppg_path)
+            if rppg_bvp is None or rppg_fs is None:
+                ax.text(
+                    0.5, 0.5, f"{task_label}: rPPG reconstruction failed",
+                    transform=ax.transAxes, ha="center", va="center", fontsize=12,
+                )
+                ax.set_title(task_label, fontsize=13, fontweight="bold")
+                continue
+
+            rppg_times, rppg_hr = calculate_rolling_hr(
+                rppg_bvp.tolist(), rppg_fs,
+                window_sec=ROLLING_WINDOW_SEC, step_sec=ROLLING_BVP_STEP_SEC,
+            )
+
+            if len(ppg_times) == 0 or len(rppg_times) == 0:
+                ax.text(
+                    0.5, 0.5, f"{task_label}: empty HR series",
+                    transform=ax.transAxes, ha="center", va="center", fontsize=12,
+                )
+                ax.set_title(task_label, fontsize=13, fontweight="bold")
+                continue
+
+            # --- Align for lag computation ---
+            rppg_df = pd.DataFrame({"t": rppg_times, "hr": rppg_hr}).sort_values("t")
+            ppg_df = pd.DataFrame({"t": ppg_times, "hr": ppg_hr}).sort_values("t")
+            tolerance_sec = 0.5 / dmc.BVP_SAMPLING_RATE_HZ
+
+            merged = pd.merge_asof(
+                rppg_df, ppg_df, on="t",
+                tolerance=tolerance_sec, direction="nearest",
+                suffixes=("_rppg", "_ppg"),
+            )
+            merged = merged.dropna(subset=["hr_rppg", "hr_ppg"])
+
+            lag_sec = 0.0
+            r_raw = mae_raw = r_comp = mae_comp = float("nan")
+
+            if len(merged) >= 10:
+                rppg_vals = merged["hr_rppg"].values
+                ppg_vals = merged["hr_ppg"].values
+                r_raw, _ = pearsonr(rppg_vals, ppg_vals)
+                mae_raw = float(np.mean(np.abs(rppg_vals - ppg_vals)))
+
+                max_lag_samples = int(2.0 / ROLLING_BVP_STEP_SEC)
+                lag_samples = _find_optimal_lag_samples(rppg_vals, ppg_vals, max_lag_samples)
+                lag_sec = lag_samples * ROLLING_BVP_STEP_SEC
+
+                if lag_samples > 0:
+                    rppg_aligned = rppg_vals[lag_samples:]
+                    ppg_aligned = ppg_vals[: len(rppg_aligned)]
+                elif lag_samples < 0:
+                    ppg_aligned = ppg_vals[-lag_samples:]
+                    rppg_aligned = rppg_vals[: len(ppg_aligned)]
+                else:
+                    rppg_aligned = rppg_vals
+                    ppg_aligned = ppg_vals
+
+                if len(rppg_aligned) >= 10:
+                    r_comp, _ = pearsonr(rppg_aligned, ppg_aligned)
+                    mae_comp = float(np.mean(np.abs(rppg_aligned - ppg_aligned)))
+
+            # --- Plot 3 lines ---
+            ax.plot(
+                ppg_times, ppg_hr,
+                color="#1976D2", linewidth=1.5, label="PPG HR", alpha=0.9,
+            )
+            ax.plot(
+                rppg_times, rppg_hr,
+                color="#4CAF50", linewidth=1.5, linestyle="--",
+                label="rPPG HR (raw)", alpha=0.7,
+            )
+            ax.plot(
+                rppg_times - lag_sec, rppg_hr,
+                color="#FF6F00", linewidth=1.5, linestyle="-.",
+                label=f"rPPG HR (lag={lag_sec:.2f}s)", alpha=0.7,
+            )
+
+            # --- Stats annotation ---
+            stats_text = (
+                f"r_raw={r_raw:.3f}  MAE_raw={mae_raw:.1f} bpm\n"
+                f"r_comp={r_comp:.3f}  MAE_comp={mae_comp:.1f} bpm\n"
+                f"lag={lag_sec:.3f}s"
+            )
+            ax.text(
+                0.02, 0.95, stats_text,
+                transform=ax.transAxes, fontsize=9, verticalalignment="top",
+                bbox=dict(
+                    boxstyle="round,pad=0.3", facecolor="white",
+                    edgecolor="gray", alpha=0.9,
+                ),
+            )
+
+            ax.set_title(task_label, fontsize=13, fontweight="bold")
+            ax.set_ylabel("Heart Rate (bpm)", fontsize=11)
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc="upper right", fontsize=9)
+
+        axes[-1].set_xlabel("Time (s)", fontsize=12)
+        fig.suptitle(
+            f"Subject {subject_id} ({group}) — PPG vs rPPG HR Overlay",
+            fontsize=15, fontweight="bold",
+        )
+        plt.tight_layout()
+
+        out_path = output_dir / f"rppg_ppg_hr_overlay_{subject_id}.jpg"
+        fig.savefig(out_path, dpi=ROLLING_SUBJECT_PLOT_DPI, bbox_inches="tight")
+        plt.close(fig)
+
+    print(f"[INFO] Saved per-subject rPPG vs PPG HR overlay plots to {output_dir}")
+
+
 def cluster_features(merged_df: pd.DataFrame) -> pd.DataFrame:
     """Apply clustering algorithms to analyze feature distribution (Sprint #2).
 
@@ -2326,6 +2484,10 @@ if __name__ == "__main__":
     # Step 8: rPPG vs PPG HR agreement analysis (Pearson r, MAE)
     print("[INFO] Analysing rPPG vs PPG HR correlation...")
     analyze_rppg_vs_ppg_hr_correlation(dataset_path, subject_group_map)
+
+    # Step 8b: Per-subject diagnostic overlay (PPG HR vs rPPG HR, raw + lag-compensated)
+    print("[INFO] Generating per-subject rPPG vs PPG HR overlay plots...")
+    plot_subject_rppg_ppg_hr_overlay(dataset_path, subject_group_map)
 
     # --- Sprint #2 (Not implemented yet) ---
     # Step 9: Clustering analysis

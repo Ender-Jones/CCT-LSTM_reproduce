@@ -27,8 +27,10 @@ import hashlib
 import json
 import math
 import shutil
+import sys
 import tempfile
 import warnings
+from dataclasses import dataclass, asdict
 from pathlib import Path
 import random
 
@@ -149,6 +151,7 @@ def run_pipeline_on_subset(smoke_data_dir: Path, smoke_manifest: dict[str, str])
     dm.run_batched_group_plots(subject_paths, smoke_manifest, dm.plot_group_rolling_hr_rppg)
 
     dm.analyze_rppg_vs_ppg_hr_correlation(smoke_data_dir, smoke_manifest)
+    dm.plot_subject_rppg_ppg_hr_overlay(smoke_data_dir, smoke_manifest)
 
     return {
         "eda_records": len(eda_features),
@@ -193,6 +196,141 @@ def initialize_smoke_output_dir(output_dir: Path) -> None:
     print(f"[SMOKE] Initialized output directory: {output_dir}")
 
 
+@dataclass
+class Check:
+    name: str
+    expected: str
+    actual: str
+    passed: bool
+
+
+def _check_eq(name: str, expected, actual) -> Check:
+    return Check(name=name, expected=str(expected), actual=str(actual), passed=bool(expected == actual))
+
+
+def _check_true(name: str, actual: bool, label: str = "") -> Check:
+    return Check(name=name, expected="True", actual=str(actual), passed=bool(actual))
+
+
+def _check_range(name: str, value: float, lo: float, hi: float) -> Check:
+    return Check(name=name, expected=f"[{lo}, {hi}]", actual=f"{value:.4f}", passed=bool(lo <= value <= hi))
+
+
+def _check_ge(name: str, value: float, threshold: float) -> Check:
+    return Check(name=name, expected=f">={threshold}", actual=f"{value:.2f}", passed=bool(value >= threshold))
+
+
+def _check_gt(name: str, value: float, threshold: float) -> Check:
+    return Check(name=name, expected=f">{threshold}", actual=f"{value:.2f}", passed=bool(value > threshold))
+
+
+def verify_smoke_outputs(
+    smoke_output_dir: Path,
+    run_stats: dict,
+    selected_subject_ids: list[str],
+) -> tuple[list[dict], bool]:
+    """Run verification checks on smoke test outputs.
+
+    Returns (checks_list_for_json, all_passed).
+    """
+    n_subjects = len(selected_subject_ids)
+    expected_records = n_subjects * 3
+    checks: list[Check] = []
+
+    # --- Record count checks ---
+    checks.append(_check_eq("eda_records", expected_records, run_stats["eda_records"]))
+    checks.append(_check_eq("ppg_records", expected_records, run_stats["ppg_records"]))
+    checks.append(_check_eq("rppg_records", expected_records, run_stats["rppg_records"]))
+    checks.append(_check_eq("merged_rows", expected_records, run_stats["merged_rows"]))
+
+    # --- Correlation CSV structure checks ---
+    corr_csv_path = smoke_output_dir / dm.OUT_CSV_RPPG_PPG_CORRELATION
+    corr_exists = corr_csv_path.exists()
+    checks.append(_check_true("correlation CSV exists", corr_exists))
+
+    if corr_exists:
+        corr_df = pd.read_csv(corr_csv_path)
+        checks.append(_check_true("correlation CSV has 'task' column", "task" in corr_df.columns))
+
+        task_values = set(corr_df["task"].fillna("").astype(str).unique())
+        valid_tasks = {"T1", "T2", "T3", ""}
+        checks.append(Check(
+            name="correlation CSV task values valid",
+            expected=str(valid_tasks),
+            actual=str(task_values),
+            passed=bool(task_values.issubset(valid_tasks)),
+        ))
+
+        data_rows = corr_df[corr_df["subject"] != "MEAN"]
+
+        # Each subject should have 3 task rows
+        for sid in selected_subject_ids:
+            subj_rows = data_rows[data_rows["subject"] == sid]
+            checks.append(_check_eq(f"{sid}: task row count", 3, len(subj_rows)))
+
+        # MEAN row exists
+        checks.append(_check_true("MEAN row exists", (corr_df["subject"] == "MEAN").any()))
+
+        # pearson_r in [-1, 1]
+        if "pearson_r" in data_rows.columns:
+            pr_min = data_rows["pearson_r"].min()
+            pr_max = data_rows["pearson_r"].max()
+            checks.append(_check_range("pearson_r min", pr_min, -1.0, 1.0))
+            checks.append(_check_range("pearson_r max", pr_max, -1.0, 1.0))
+
+        # mae_bpm >= 0
+        if "mae_bpm" in data_rows.columns:
+            mae_min = data_rows["mae_bpm"].min()
+            checks.append(_check_ge("mae_bpm min", mae_min, 0.0))
+
+        # n_matched_points > 0
+        if "n_matched_points" in data_rows.columns:
+            nmp_min = data_rows["n_matched_points"].min()
+            checks.append(_check_gt("n_matched_points min", float(nmp_min), 0))
+
+        # Regression guard: avg match_rate > 50%
+        if "match_rate_vs_larger_percent" in data_rows.columns:
+            avg_match = data_rows["match_rate_vs_larger_percent"].mean()
+            checks.append(_check_gt("avg match_rate > 50% (regression guard)", avg_match, 50.0))
+
+    # --- Overlay plot file existence ---
+    for sid in selected_subject_ids:
+        overlay_path = (
+            smoke_output_dir
+            / dm.OUT_DIR_RPPG_PPG_HR_OVERLAY
+            / f"rppg_ppg_hr_overlay_{sid}.jpg"
+        )
+        checks.append(_check_true(f"overlay plot exists: {sid}", overlay_path.exists()))
+
+    # --- Output file count ---
+    all_files = [p for p in smoke_output_dir.rglob("*") if p.is_file()]
+    min_expected_files = n_subjects * 5 + 10
+    checks.append(_check_ge("total output file count", float(len(all_files)), float(min_expected_files)))
+
+    # --- Print CLI report ---
+    sep = "=" * 64
+    print(f"\n{sep}")
+    print(f"  SMOKE VERIFICATION ({n_subjects} subjects)")
+    print(sep)
+
+    for c in checks:
+        status = "PASSED" if c.passed else "FAILED"
+        print(f"  [{status}] {c.name:<45s} expected: {c.expected}, actual: {c.actual}")
+
+    n_passed = sum(c.passed for c in checks)
+    n_total = len(checks)
+    all_passed = n_passed == n_total
+
+    print(sep)
+    print(f"  RESULT: {n_passed}/{n_total} checks passed")
+    if not all_passed:
+        print("  *** FAILURES DETECTED ***")
+    print(f"{sep}\n")
+
+    checks_for_json = [asdict(c) for c in checks]
+    return checks_for_json, all_passed
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run data_mining smoke test on a small subject subset."
@@ -226,6 +364,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    random.seed(42)
     warnings.filterwarnings("ignore", message="EDA signal is sampled at very low frequency")
 
     dataset_path = dmc.read_pathfile_or_ask_for_path()
@@ -264,6 +403,11 @@ def main() -> None:
             )
             run_stats = run_pipeline_on_subset(smoke_data_dir, smoke_manifest)
 
+        # --- Verification ---
+        verification_checks, all_passed = verify_smoke_outputs(
+            smoke_output_dir, run_stats, selected_subject_ids,
+        )
+
         output_summary = collect_output_summary(smoke_output_dir)
         summary = {
             "selected_subject_ids": selected_subject_ids,
@@ -271,6 +415,12 @@ def main() -> None:
             "smoke_data_note": "Temporary symlink dataset generated during runtime",
             "run_stats": run_stats,
             "output_summary": output_summary,
+            "verification": {
+                "n_passed": sum(1 for c in verification_checks if c["passed"]),
+                "n_total": len(verification_checks),
+                "all_passed": all_passed,
+                "checks": verification_checks,
+            },
         }
 
         summary_path = smoke_output_dir / args.summary_name
@@ -278,6 +428,8 @@ def main() -> None:
         print(f"[SMOKE] Summary saved to {summary_path}")
     finally:
         dmc.DATA_MINING_OUTPUT_DIR = original_output_dir
+
+    sys.exit(0 if all_passed else 1)
 
 
 if __name__ == "__main__":
